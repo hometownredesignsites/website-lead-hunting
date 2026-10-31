@@ -4,6 +4,7 @@ from urllib.parse import quote
 from tools.lead_hunt import (
     build_queries,
     classify_result,
+    challenge_text_reason,
     is_excluded_host,
     parse_search_results,
     resolve_ddg_result,
@@ -66,6 +67,11 @@ class LeadHuntTests(unittest.TestCase):
         self.assertEqual(result["automated_priority"], "pass")
         self.assertIn("score_basis", result)
         self.assertNotIn("human_review", result)
+
+    def test_detects_duckduckgo_human_verification_challenge(self):
+        body = "Unfortunately, bots use DuckDuckGo too. Please complete the following challenge to confirm this search was made by a human. Select all squares containing a duck."
+        self.assertEqual(challenge_text_reason("https://html.duckduckgo.com/html/", "DuckDuckGo", body),
+                         "DuckDuckGo human-verification challenge text")
 
 
 if __name__ == "__main__":

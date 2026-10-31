@@ -227,15 +227,29 @@ def public_host(host: str) -> bool:
         return False
 
 
-async def visible_challenge(page, url: str, title: str, body: str) -> str | None:
+def challenge_text_reason(url: str, title: str, body: str) -> str | None:
     lowered = (body or "").lower()
     if "anomaly.js" in (url or "").lower():
         return "DuckDuckGo anomaly challenge URL"
+    if any(term in lowered for term in ("complete the following challenge", "select all squares",
+                                        "bots use duckduckgo too", "search was made by a human")):
+        return "DuckDuckGo human-verification challenge text"
     if any(term in lowered for term in ("verify you are not a robot", "verify you are human",
                                        "complete the captcha", "unusual traffic")):
         return "Visible search-provider verification/challenge text"
     if "captcha" in lowered and any(term in lowered for term in ("automated", "robot", "human")):
         return "Visible CAPTCHA text"
+    if "challenge" in lowered and any(term in lowered for term in ("robot", "human", "duckduckgo")):
+        return "Visible search-provider challenge text"
+    if "sorry" in (title or "").lower() and "verify" in lowered:
+        return "Challenge title and verification text"
+    return None
+
+
+async def visible_challenge(page, url: str, title: str, body: str) -> str | None:
+    reason = challenge_text_reason(url, title, body)
+    if reason:
+        return reason
     frames = page.locator("iframe[src*='recaptcha'], iframe[title*='captcha']")
     try:
         for index in range(min(await frames.count(), 5)):
@@ -243,8 +257,6 @@ async def visible_challenge(page, url: str, title: str, body: str) -> str | None
                 return "Visible verification iframe"
     except Exception:
         pass
-    if "sorry" in (title or "").lower() and "verify" in lowered:
-        return "Challenge title and verification text"
     return None
 
 
