@@ -278,28 +278,35 @@ async def extract_ddg_results(page) -> list[dict]:
 
 async def screenshot_with_fallback(page, path: Path, full_timeout_ms: int = 30000) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        await page.screenshot(path=str(path), full_page=True, animations="disabled", timeout=full_timeout_ms)
-        saved_path = path.resolve()
+    errors = []
+    budgets = [min(20000, full_timeout_ms), max(1000, full_timeout_ms - min(20000, full_timeout_ms))]
+    for attempt, timeout_ms in enumerate(budgets, start=1):
         try:
-            display_path = saved_path.relative_to(Path.cwd().resolve()).as_posix()
-        except ValueError:
-            display_path = saved_path.as_posix()
-        return {"path": display_path, "mode": "full_page", "status": "saved"}
-    except Exception as full_error:
-        fallback_path = path.with_name(path.stem + "_viewport" + path.suffix)
-        try:
-            await page.screenshot(path=str(fallback_path), full_page=False, animations="disabled", timeout=15000)
-            saved_path = fallback_path.resolve()
+            await page.screenshot(path=str(path), full_page=True, animations="disabled", timeout=timeout_ms)
+            saved_path = path.resolve()
             try:
                 display_path = saved_path.relative_to(Path.cwd().resolve()).as_posix()
             except ValueError:
                 display_path = saved_path.as_posix()
-            return {"path": display_path, "mode": "viewport_fallback",
-                    "status": "saved", "full_page_error": str(full_error)[:400]}
-        except Exception as view_error:
-            return {"path": None, "mode": "none", "status": "error",
-                    "full_page_error": str(full_error)[:400], "viewport_error": str(view_error)[:400]}
+            return {"path": display_path, "mode": "full_page", "status": "saved",
+                    "attempts": attempt, "prior_errors": errors}
+        except Exception as exc:
+            errors.append(str(exc)[:400])
+            if attempt == 1:
+                await page.wait_for_timeout(1000)
+    fallback_path = path.with_name(path.stem + "_viewport" + path.suffix)
+    try:
+        await page.screenshot(path=str(fallback_path), full_page=False, animations="disabled", timeout=15000)
+        saved_path = fallback_path.resolve()
+        try:
+            display_path = saved_path.relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            display_path = saved_path.as_posix()
+        return {"path": display_path, "mode": "viewport_fallback", "status": "saved",
+                "attempts": 3, "full_page_errors": errors}
+    except Exception as view_error:
+        return {"path": None, "mode": "none", "status": "error",
+                "full_page_errors": errors, "viewport_error": str(view_error)[:400]}
 
 
 async def page_metrics(page) -> dict:
@@ -333,7 +340,13 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
     shots: dict = {}
     try:
         await page.set_viewport_size({"width": 1440, "height": 1000})
-        response = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        try:
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        except Exception as first_navigation_error:
+            if "ERR_ABORTED" not in str(first_navigation_error):
+                raise
+            await page.wait_for_timeout(1000)
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_timeout(900)
         final_url = page.url
         final_host = host_of(final_url)
