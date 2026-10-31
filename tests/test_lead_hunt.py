@@ -1,0 +1,72 @@
+import unittest
+from urllib.parse import quote
+
+from tools.lead_hunt import (
+    build_queries,
+    classify_result,
+    is_excluded_host,
+    parse_search_results,
+    resolve_ddg_result,
+    score_signals,
+)
+
+
+class LeadHuntTests(unittest.TestCase):
+    def test_builds_category_location_pairs_in_stable_order(self):
+        queries = build_queries("Kitchen remodelers\nPool builders", "Denver, CO\nAurora, CO", "Denver metro")
+        self.assertEqual([item["query"] for item in queries], [
+            "Kitchen remodelers Denver, CO", "Kitchen remodelers Aurora, CO",
+            "Pool builders Denver, CO", "Pool builders Aurora, CO",
+        ])
+        self.assertEqual([item["query_index"] for item in queries], [1, 2, 3, 4])
+
+    def test_unwraps_organic_duckduckgo_link_and_discards_tracking(self):
+        target = "https://www.example.com/services?utm_source=ddg&keep=yes#section"
+        wrapped = "https://duckduckgo.com/l/?uddg=" + quote(target, safe="") + "&rut=tracking"
+        parsed = resolve_ddg_result(wrapped)
+        self.assertEqual(parsed["domain"], "example.com")
+        self.assertEqual(parsed["url"], "https://www.example.com/services?keep=yes")
+        self.assertFalse(parsed["is_ad"])
+
+    def test_marks_nested_bing_ad_wrapper_without_visiting_it(self):
+        ad = "https://duckduckgo.com/y.js?ad_provider=bingv7aa&ad_type=txad&ad_domain=angi.com"
+        wrapped = "https://duckduckgo.com/l/?uddg=" + quote(ad, safe="")
+        parsed = resolve_ddg_result(wrapped)
+        self.assertTrue(parsed["is_ad"])
+        self.assertEqual(parsed["ad_domain"], "angi.com")
+        self.assertIsNone(parsed["url"])
+        disposition, _ = classify_result(parsed)
+        self.assertEqual(disposition, "sponsored_ad")
+
+    def test_excludes_directory_subdomains(self):
+        self.assertTrue(is_excluded_host("www.homeadvisor.com"))
+        self.assertTrue(is_excluded_host("reviews.angi.com"))
+        self.assertFalse(is_excluded_host("local.example.com"))
+
+    def test_unwraps_and_classifies_known_directory_result(self):
+        wrapped = "https://duckduckgo.com/l/?uddg=" + quote("https://www.homeguide.com/co/denver", safe="")
+        rows = parse_search_results([{"href": wrapped, "title": "Denver remodeling contractors", "snippet": ""}])
+        self.assertEqual(rows[0]["domain"], "homeguide.com")
+        self.assertEqual(classify_result(rows[0])[0], "directory_or_lead_generation")
+
+    def test_technical_score_remains_uncertain_with_limited_evidence(self):
+        result = score_signals({"desktop": {"viewportMeta": True}, "mobile": {}})
+        self.assertEqual(result["automated_priority"], "uncertain")
+        self.assertEqual(result["evidence_confidence"], "limited")
+
+    def test_technical_score_does_not_replace_visual_human_review(self):
+        metrics = {
+            "https": True,
+            "desktop": {"viewportMeta": True, "hasContactPath": True, "hasCta": True,
+                        "titlePresent": True, "descriptionPresent": True, "imageCount": 0,
+                        "copyrightYears": [2026]},
+            "mobile": {"horizontalOverflowPx": 0},
+        }
+        result = score_signals(metrics)
+        self.assertEqual(result["automated_priority"], "pass")
+        self.assertIn("score_basis", result)
+        self.assertNotIn("human_review", result)
+
+
+if __name__ == "__main__":
+    unittest.main()

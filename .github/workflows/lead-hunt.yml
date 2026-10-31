@@ -1,0 +1,145 @@
+name: Website lead hunt
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_key:
+        description: "Stable run folder key; reuse it to continue the same saved run"
+        required: true
+        default: "denver-kitchen-ddg"
+        type: string
+      categories:
+        description: "Business categories, one per line"
+        required: true
+        default: "Kitchen remodelers"
+        type: string
+      locations:
+        description: "Named locations, one per line"
+        required: true
+        default: "Denver, CO"
+        type: string
+      region:
+        description: "Human-readable target region"
+        required: true
+        default: "Denver metro, Colorado"
+        type: string
+      max_queries:
+        description: "Pending queries to process in this batch (1-20)"
+        required: true
+        default: "2"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "5"
+          - "10"
+          - "20"
+      max_sites_per_query:
+        description: "Direct business websites to assess per query (1-8)"
+        required: true
+        default: "3"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "5"
+          - "8"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website-lead-hunt-main-writer
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install browser dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run offline regression checks
+        run: python -m unittest discover -s tests -v
+
+      - name: Run bounded DDG search and website assessment batch
+        id: scan
+        shell: bash
+        env:
+          RUN_KEY: ${{ inputs.run_key }}
+          CATEGORIES: ${{ inputs.categories }}
+          LOCATIONS: ${{ inputs.locations }}
+          REGION: ${{ inputs.region }}
+          MAX_QUERIES: ${{ inputs.max_queries }}
+          MAX_SITES_PER_QUERY: ${{ inputs.max_sites_per_query }}
+        run: |
+          if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+            echo "run_key must contain only letters, digits, dot, underscore, and hyphen" >&2
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p runs
+          set +e
+          xvfb-run --auto-servernum --server-args="-screen 0 1440x1000x24" \
+            python tools/lead_hunt.py \
+              --categories "$CATEGORIES" \
+              --locations "$LOCATIONS" \
+              --region "$REGION" \
+              --state-dir "runs/$RUN_KEY" \
+              --max-queries "$MAX_QUERIES" \
+              --max-sites-per-query "$MAX_SITES_PER_QUERY"
+          scan_rc=$?
+          echo "exit_code=$scan_rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Commit findings and screenshots to the selected branch
+        if: always()
+        shell: bash
+        env:
+          RUN_KEY: ${{ inputs.run_key }}
+        run: |
+          if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || [[ ! -d "runs/$RUN_KEY" ]]; then
+            echo "No safe run directory to commit."
+            exit 0
+          fi
+          if [[ -n "$(git status --porcelain -- "runs/$RUN_KEY")" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- "runs/$RUN_KEY"
+            git commit -m "Record website lead-hunt batch: $RUN_KEY"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "No new run data to commit."
+          fi
+
+      - name: Upload a short-lived backup artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lead-hunt-${{ inputs.run_key }}-${{ github.run_id }}
+          path: runs/${{ inputs.run_key }}/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Report scan outcome
+        if: always() && steps.scan.outputs.exit_code != '0'
+        run: |
+          echo "Lead-hunt runner exited with ${{ steps.scan.outputs.exit_code }}. Any progress and evidence were committed when available."
+          exit 1
