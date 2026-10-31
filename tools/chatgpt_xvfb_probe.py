@@ -97,6 +97,16 @@ async def main() -> int:
                 })
                 if challenges:
                     result["status"] = "blocked"
+                    result["body_excerpt"] = body[:6000]
+                    try:
+                        await page.screenshot(
+                            path=str(screenshot_path), full_page=True, timeout=20_000
+                        )
+                        result["screenshot"] = screenshot_path.name
+                    except Exception as screenshot_error:
+                        result["screenshot_error"] = (
+                            f"{type(screenshot_error).__name__}: {screenshot_error}"
+                        )
                     print("ChatGPT presented a challenge; stopping without interaction.", flush=True)
                     return_code = 2
                 else:
