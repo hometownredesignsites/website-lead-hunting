@@ -10,6 +10,7 @@ import json
 import re
 import socket
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
@@ -41,6 +42,73 @@ SCORE_WEIGHTS = {
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def observed_url(url: str) -> dict:
+    """Return URL metadata without query strings, fragments, or credentials."""
+    try:
+        parts = urlsplit(url)
+        return {"scheme": parts.scheme.lower(), "host": (parts.hostname or "").lower(),
+                "path": parts.path[:300]}
+    except ValueError:
+        return {"scheme": "", "host": "", "path": ""}
+
+
+class BehaviorLogger:
+    """Append-only diagnostic events; never writes request headers or page bodies."""
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.started = time.monotonic()
+        self.sequence = 0
+        self.stream = path.open("a", encoding="utf-8", newline="\n")
+        self.emit("batch_process_started", log_file=path.name)
+
+    def emit(self, event: str, **fields) -> None:
+        self.sequence += 1
+        record = {"sequence": self.sequence,
+                  "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                  "elapsed_ms": round((time.monotonic() - self.started) * 1000),
+                  "event": event, **fields}
+        self.stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self.stream.flush()
+
+    def close(self) -> None:
+        if not self.stream.closed:
+            self.emit("batch_process_finished")
+            self.stream.close()
+
+
+def observe_ddg_requests(page, logger: BehaviorLogger) -> None:
+    """Capture DDG request metadata only; omit query values, headers, cookies, and bodies."""
+    def is_ddg(url: str) -> bool:
+        host = observed_url(url)["host"]
+        return host == "duckduckgo.com" or host.endswith(".duckduckgo.com")
+
+    def on_request(request) -> None:
+        if not is_ddg(request.url):
+            return
+        logger.emit("ddg_request_started", url=observed_url(request.url), method=request.method,
+                    resource_type=request.resource_type, navigation=request.is_navigation_request())
+
+    def on_response(response) -> None:
+        if not is_ddg(response.url):
+            return
+        headers = response.headers
+        logger.emit("ddg_response_received", url=observed_url(response.url), status=response.status,
+                    resource_type=response.request.resource_type,
+                    navigation=response.request.is_navigation_request(),
+                    content_type=headers.get("content-type"), retry_after=headers.get("retry-after"))
+
+    def on_request_failed(request) -> None:
+        if not is_ddg(request.url):
+            return
+        failure = getattr(request, "failure", None)
+        logger.emit("ddg_request_failed", url=observed_url(request.url), method=request.method,
+                    resource_type=request.resource_type, failure=str(failure or "")[:250])
+
+    page.on("request", on_request)
+    page.on("response", on_response)
+    page.on("requestfailed", on_request_failed)
 
 
 def slugify(value: str) -> str:
@@ -276,11 +344,16 @@ async def extract_ddg_results(page) -> list[dict]:
     }""")
 
 
-async def screenshot_with_fallback(page, path: Path, full_timeout_ms: int = 30000) -> dict:
+async def screenshot_with_fallback(page, path: Path, full_timeout_ms: int = 30000,
+                                   logger: BehaviorLogger | None = None, stage: str = "unspecified") -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     errors = []
     budgets = [min(20000, full_timeout_ms), max(1000, full_timeout_ms - min(20000, full_timeout_ms))]
     for attempt, timeout_ms in enumerate(budgets, start=1):
+        started = time.monotonic()
+        if logger:
+            logger.emit("screenshot_attempt_started", stage=stage, filename=path.name,
+                        mode="full_page", attempt=attempt, timeout_ms=timeout_ms)
         try:
             await page.screenshot(path=str(path), full_page=True, animations="disabled", timeout=timeout_ms)
             saved_path = path.resolve()
@@ -288,13 +361,25 @@ async def screenshot_with_fallback(page, path: Path, full_timeout_ms: int = 3000
                 display_path = saved_path.relative_to(Path.cwd().resolve()).as_posix()
             except ValueError:
                 display_path = saved_path.as_posix()
-            return {"path": display_path, "mode": "full_page", "status": "saved",
-                    "attempts": attempt, "prior_errors": errors}
+            result = {"path": display_path, "mode": "full_page", "status": "saved",
+                      "attempts": attempt, "prior_errors": errors}
+            if logger:
+                logger.emit("screenshot_saved", stage=stage, filename=path.name, mode="full_page",
+                            attempt=attempt, elapsed_ms=round((time.monotonic() - started) * 1000))
+            return result
         except Exception as exc:
             errors.append(str(exc)[:400])
+            if logger:
+                logger.emit("screenshot_attempt_failed", stage=stage, filename=path.name,
+                            mode="full_page", attempt=attempt, timeout_ms=timeout_ms,
+                            exception_type=type(exc).__name__, elapsed_ms=round((time.monotonic() - started) * 1000))
             if attempt == 1:
                 await page.wait_for_timeout(1000)
     fallback_path = path.with_name(path.stem + "_viewport" + path.suffix)
+    started = time.monotonic()
+    if logger:
+        logger.emit("screenshot_attempt_started", stage=stage, filename=fallback_path.name,
+                    mode="viewport_fallback", attempt=3, timeout_ms=15000)
     try:
         await page.screenshot(path=str(fallback_path), full_page=False, animations="disabled", timeout=15000)
         saved_path = fallback_path.resolve()
@@ -302,9 +387,19 @@ async def screenshot_with_fallback(page, path: Path, full_timeout_ms: int = 3000
             display_path = saved_path.relative_to(Path.cwd().resolve()).as_posix()
         except ValueError:
             display_path = saved_path.as_posix()
-        return {"path": display_path, "mode": "viewport_fallback", "status": "saved",
-                "attempts": 3, "full_page_errors": errors}
+        result = {"path": display_path, "mode": "viewport_fallback", "status": "saved",
+                  "attempts": 3, "full_page_errors": errors}
+        if logger:
+            logger.emit("screenshot_saved", stage=stage, filename=fallback_path.name,
+                        mode="viewport_fallback", attempt=3,
+                        elapsed_ms=round((time.monotonic() - started) * 1000))
+        return result
     except Exception as view_error:
+        if logger:
+            logger.emit("screenshot_attempt_failed", stage=stage, filename=fallback_path.name,
+                        mode="viewport_fallback", attempt=3, timeout_ms=15000,
+                        exception_type=type(view_error).__name__,
+                        elapsed_ms=round((time.monotonic() - started) * 1000))
         return {"path": None, "mode": "none", "status": "error",
                 "full_page_errors": errors, "viewport_error": str(view_error)[:400]}
 
@@ -328,7 +423,7 @@ async def page_metrics(page) -> dict:
 
 
 async def assess_site(page, result: dict, query: dict, run_dir: Path,
-                      public_host_cache: dict[str, bool]) -> dict:
+                      public_host_cache: dict[str, bool], logger: BehaviorLogger | None = None) -> dict:
     url = result["url"]
     requested_host = result["domain"]
     if requested_host not in public_host_cache:
@@ -340,11 +435,18 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
     shots: dict = {}
     try:
         await page.set_viewport_size({"width": 1440, "height": 1000})
+        started = time.monotonic()
+        if logger:
+            logger.emit("direct_site_navigation_started", query_index=query.get("query_index"),
+                        result_position=result.get("position"), domain=requested_host)
         try:
             response = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
         except Exception as first_navigation_error:
             if "ERR_ABORTED" not in str(first_navigation_error):
                 raise
+            if logger:
+                logger.emit("direct_site_navigation_retry", query_index=query.get("query_index"),
+                            domain=requested_host, reason="ERR_ABORTED", wait_ms=1000)
             await page.wait_for_timeout(1000)
             response = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_timeout(900)
@@ -362,14 +464,21 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
         metrics["final_url"] = final_url
         metrics["title"] = await page.title()
         metrics["desktop"] = await page_metrics(page)
+        if logger:
+            logger.emit("direct_site_navigation_completed", query_index=query.get("query_index"),
+                        domain=requested_host, final_domain=final_host,
+                        status=response.status if response else None,
+                        elapsed_ms=round((time.monotonic() - started) * 1000))
         stem = slugify(final_host)
-        desktop = await screenshot_with_fallback(page, run_dir / "screenshots" / f"{stem}_desktop.png")
+        desktop = await screenshot_with_fallback(page, run_dir / "screenshots" / f"{stem}_desktop.png",
+                                                 logger=logger, stage="desktop")
         shots["desktop"] = desktop
 
         await page.set_viewport_size({"width": 390, "height": 844})
         await page.wait_for_timeout(350)
         metrics["mobile"] = await page_metrics(page)
-        mobile = await screenshot_with_fallback(page, run_dir / "screenshots" / f"{stem}_mobile.png", 25000)
+        mobile = await screenshot_with_fallback(page, run_dir / "screenshots" / f"{stem}_mobile.png", 25000,
+                                                logger=logger, stage="mobile")
         shots["mobile"] = mobile
         signals = score_signals(metrics)
         return {"site_check_status": "loaded", "domain": final_host, "final_url": final_url,
@@ -379,6 +488,10 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
                 "evidence": metrics, "screenshots": shots, "evidence_confidence": signals["evidence_confidence"],
                 "hermes_visual_review": "pending", "human_review": "pending"}
     except Exception as exc:
+        if logger:
+            logger.emit("direct_site_assessment_failed", query_index=query.get("query_index"),
+                        domain=requested_host, exception_type=type(exc).__name__,
+                        err_aborted="ERR_ABORTED" in str(exc))
         metrics["assessment_error"] = f"{type(exc).__name__}: {exc}"[:700]
         signals = score_signals(metrics)
         return {"site_check_status": "error", "domain": host_of(page.url) or requested_host,
@@ -446,6 +559,7 @@ async def run_batch(args: argparse.Namespace) -> int:
         if prior.get("input_fingerprint") != input_hash:
             raise ValueError("This run key already contains different categories/locations/region; choose a new run key")
         manifest = {**prior, "updated_at": now_iso()}
+    logger = BehaviorLogger(run_dir / "BEHAVIOR_LOG.jsonl")
     records = {int(row["query_index"]): row for row in read_jsonl(run_dir / "QUERY_LEDGER.jsonl")
                if row.get("query_index") is not None}
     candidates = read_jsonl(run_dir / "CANDIDATE_LEDGER.jsonl")
@@ -458,10 +572,16 @@ async def run_batch(args: argparse.Namespace) -> int:
     public_host_cache: dict[str, bool] = {}
     pending = [q for q in queries if not query_is_complete(records.get(q["query_index"], {}))]
     batch = pending[:args.max_queries]
+    logger.emit("batch_configuration", configured_query_count=len(queries), pending_query_count=len(pending),
+                selected_query_count=len(batch), max_queries=args.max_queries,
+                max_sites_per_query=args.max_sites_per_query, search_engine="duckduckgo_html",
+                request_logging="DuckDuckGo host metadata only; query parameters, headers, cookies, and bodies omitted")
     if not batch:
         print("All configured queries are already complete; no search was repeated.")
         progress = save_run(run_dir, queries, records, candidates, manifest)
         print(json.dumps(progress, indent=2))
+        logger.emit("batch_no_pending_queries")
+        logger.close()
         return 0
 
     async with async_playwright() as playwright:
@@ -483,6 +603,10 @@ async def run_batch(args: argparse.Namespace) -> int:
 
         await context.route("**/*", guard_local_navigation)
         page = await context.new_page()
+        observe_ddg_requests(page, logger)
+        logger.emit("browser_ready", browser="playwright_chromium_headed", display="xvfb",
+                    page_count=len(context.pages), context_reused_for_direct_sites=True,
+                    result_link_clicks=0, site_navigation="direct_page_goto_after_url_extraction")
         blocked = False
         for query in batch:
             idx = query["query_index"]
@@ -497,6 +621,10 @@ async def run_batch(args: argparse.Namespace) -> int:
             records[idx] = row
             save_run(run_dir, queries, records, candidates, manifest)
             print(f"Searching {idx}/{len(queries)}: {query['query']}", flush=True)
+            logger.emit("search_navigation_started", query_index=idx, category=query["category"],
+                        location=query["location"], pending_query_ordinal=batch.index(query) + 1,
+                        batch_query_count=len(batch), destination=observed_url(search_url))
+            search_started = time.monotonic()
             try:
                 response = await page.goto(search_url, wait_until="domcontentloaded", timeout=35000)
                 await page.wait_for_timeout(1500)
@@ -507,10 +635,20 @@ async def run_batch(args: argparse.Namespace) -> int:
                             "http_status": response.status if response else None,
                             "challenge_status": "blocked" if reason else "none_visible",
                             "challenge_evidence": reason})
+                logger.emit("search_page_loaded", query_index=idx,
+                            response_status=response.status if response else None,
+                            destination=observed_url(page.url), title=title[:160], body_character_count=len(body),
+                            challenge_status="blocked" if reason else "none_visible",
+                            challenge_evidence=reason,
+                            navigation_elapsed_ms=round((time.monotonic() - search_started) * 1000))
                 serp_path = run_dir / "screenshots" / f"query_{idx:04d}_serp.png"
-                serp_shot = await screenshot_with_fallback(page, serp_path, 15000)
+                serp_shot = await screenshot_with_fallback(page, serp_path, 15000,
+                                                           logger=logger, stage="search_results")
                 row["serp_screenshot"] = serp_shot
                 if reason:
+                    logger.emit("search_challenge_detected", query_index=idx,
+                                response_status=response.status if response else None,
+                                evidence=reason, action="stop_without_retry")
                     row.update({"terminal_status": "blocked", "finished_at": now_iso()})
                     blocked = True
                     save_run(run_dir, queries, records, candidates, manifest, blocked=True)
@@ -518,6 +656,14 @@ async def run_batch(args: argparse.Namespace) -> int:
                     break
                 results = parse_search_results(await extract_ddg_results(page))
                 row["organic_results_returned_count"] = len(results)
+                dispositions = [classify_result(result, exclusions)[0] for result in results]
+                logger.emit("search_results_extracted", query_index=idx, result_count=len(results),
+                            sponsored_count=dispositions.count("sponsored_ad"),
+                            excluded_count=dispositions.count("directory_or_lead_generation"),
+                            social_count=dispositions.count("social_or_video"),
+                            editorial_count=dispositions.count("editorial_or_listicle"),
+                            eligible_count=dispositions.count("eligible_for_site_check"),
+                            site_visit_cap=args.max_sites_per_query)
                 if not results:
                     row.update({"terminal_status": "no_results", "finished_at": now_iso(),
                                 "error": "No organic result cards were extracted; inspect SERP screenshot and selectors"})
@@ -531,6 +677,9 @@ async def run_batch(args: argparse.Namespace) -> int:
                     disposition, reason_text = classify_result(result, exclusions)
                     result["result_disposition"] = disposition
                     result["disposition_reason"] = reason_text
+                    logger.emit("search_result_classified", query_index=idx,
+                                result_position=result["position"], domain=result.get("domain"),
+                                disposition=disposition)
                     if disposition != "eligible_for_site_check" or eligible_sites >= args.max_sites_per_query:
                         if disposition == "eligible_for_site_check":
                             result["result_disposition"] = "eligible_not_visited_limit"
@@ -549,7 +698,7 @@ async def run_batch(args: argparse.Namespace) -> int:
                         result["candidate_domain"] = host
                     else:
                         eligible_sites += 1
-                        site = await assess_site(page, result, query, run_dir, public_host_cache)
+                        site = await assess_site(page, result, query, run_dir, public_host_cache, logger)
                         if site.get("domain") and site["domain"] in candidate_by_domain:
                             result["result_disposition"] = "duplicate_domain"
                             result["disposition_reason"] = "Redirected to a domain already assessed earlier in the run"
@@ -584,8 +733,13 @@ async def run_batch(args: argparse.Namespace) -> int:
                 records[idx] = row
                 save_run(run_dir, queries, records, candidates, manifest)
                 print(f"Saved query {idx}: {len(results)} results, {eligible_sites} direct sites checked", flush=True)
+                logger.emit("search_query_completed", query_index=idx, result_count=len(results),
+                            direct_sites_checked=eligible_sites, status="success")
+                logger.emit("inter_query_wait_started", query_index=idx, wait_ms=1200)
                 await page.wait_for_timeout(1200)
             except Exception as exc:
+                logger.emit("search_query_failed", query_index=idx, exception_type=type(exc).__name__,
+                            challenge_detection_attempted=bool(row.get("actual_url")))
                 row.update({"terminal_status": "error", "finished_at": now_iso(),
                             "error": f"{type(exc).__name__}: {exc}"[:1200]})
                 records[idx] = row
@@ -593,6 +747,7 @@ async def run_batch(args: argparse.Namespace) -> int:
                 print(f"Query {idx} failed: {row['error']}", file=sys.stderr, flush=True)
         await context.close()
         await browser.close()
+    logger.close()
     progress = save_run(run_dir, queries, records, candidates, manifest, blocked=blocked)
     print(json.dumps(progress, indent=2))
     if blocked or any(records.get(q["query_index"], {}).get("terminal_status") in {"error", "no_results"} for q in batch):

@@ -50,6 +50,8 @@ The `Website lead hunt` GitHub Actions workflow runs a bounded DDG search batch 
 
 Each search is capped to 20 queries per invocation and 8 direct-site checks per query. It stops if DDG presents a challenge. Sponsored results, known directories/lead-generation sites, social/video pages, and common editorial/listicle results are recorded with a disposition and are not visited as business sites. Domain exclusions are maintained in `config/excluded_domains.txt`.
 
+Every invocation appends `BEHAVIOR_LOG.jsonl` to the run folder. It records ordered timestamps for DDG request/response activity and status codes, search navigation, visible challenge evidence, result classification totals, direct-site navigation, inter-query waits, and screenshot retries. Network observations are restricted to DuckDuckGo host/path metadata; query parameters, request headers, cookies, and response bodies are not logged. This can establish the activity and response immediately preceding a challenge, but DuckDuckGo does not expose its internal challenge decision, so the log cannot prove which provider-side signal caused it. The runner stops without retrying a challenged query.
+
 The machine-generated `automated_priority` is based only on captured technical signals. `hermes_visual_review` and `human_review` remain pending; search rank, website metrics, and screenshots do not prove that a company is active, local, or a good sales prospect. Review candidate identity and market fit separately, then run Hermes locally against the saved desktop screenshots:
 
 ```bash
