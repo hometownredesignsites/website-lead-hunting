@@ -84,6 +84,10 @@ async def main() -> int:
                 final_url = page.url
                 body = await page.locator("body").inner_text(timeout=15_000)
                 challenges = await is_challenge(page, body)
+                if response and response.status in (401, 403):
+                    challenges.append(f"HTTP {response.status} access challenge before prompt submission")
+                if "just a moment" in title.lower():
+                    challenges.append("interstitial title: Just a moment...")
 
                 result.update({
                     "http_status": response.status if response else None,
