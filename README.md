@@ -23,6 +23,12 @@ The probe does not open result websites, solve challenges, or disguise browser i
 
 The expected successful status is `results_found`. The workflow fails when the probe returns a challenge, extracts no results, or encounters an error; artifacts are uploaded whenever possible.
 
+## One-shot ChatGPT web-search probe
+
+The **ChatGPT Xvfb one-shot search probe** workflow submits one prompt to the public `chatgpt.com` experience in headed Chromium under Xvfb. It records whether the page accepts the prompt, saves the answer and source links, and uploads a screenshot plus JSON summary as a seven-day artifact. It does not sign in, retry, or interact with a challenge. The default prompt requests independently owned in-ground pool companies serving Indianapolis, Indiana.
+
+This is a one-shot UI feasibility check, not a structured search API or an exhaustive lead-discovery run. A successful answer should be checked against its cited sources before using the URLs as pipeline input.
+
 ## Local use
 
 Requires Python 3.11+, Playwright, Chromium, and Xvfb:

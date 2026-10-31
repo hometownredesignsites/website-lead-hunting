@@ -1,0 +1,67 @@
+name: ChatGPT Xvfb one-shot search probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "One prompt to submit to the public ChatGPT web experience"
+        required: true
+        default: "Find independently owned in-ground pool companies serving Indianapolis, Indiana. Search the web and return up to 10 businesses, each with its official website URL and a source citation supporting that it serves this area. If you cannot verify the official website or service area, say so. Do not invent businesses or URLs."
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chatgpt-xvfb-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install Xvfb and Playwright Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb
+          python -m pip install --disable-pip-version-check "playwright==1.58.0"
+          python -m playwright install --with-deps chromium
+
+      - name: Submit one prompt to ChatGPT under Xvfb
+        id: probe
+        env:
+          CHATGPT_PROMPT: ${{ inputs.prompt }}
+        run: |
+          mkdir -p artifacts/chatgpt-xvfb-probe
+          set +e
+          xvfb-run --auto-servernum --server-args="-screen 0 1440x1000x24" \
+            python tools/chatgpt_xvfb_probe.py \
+              --prompt "$CHATGPT_PROMPT" \
+              --artifacts-dir artifacts/chatgpt-xvfb-probe
+          probe_rc=$?
+          echo "exit_code=$probe_rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload search evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: chatgpt-xvfb-probe-${{ github.run_id }}
+          path: artifacts/chatgpt-xvfb-probe/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Report probe outcome
+        if: always() && steps.probe.outputs.exit_code != '0'
+        run: |
+          echo "ChatGPT probe returned ${{ steps.probe.outputs.exit_code }}. Review the uploaded status and screenshot."
+          exit 1
