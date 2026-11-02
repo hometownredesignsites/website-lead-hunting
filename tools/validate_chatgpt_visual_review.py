@@ -29,6 +29,19 @@ def main() -> int:
     if not review:
         errors.append("response is not a JSON object")
     else:
+        required_keys = {
+            "candidate_id", "website_url", "visual_opportunity_score", "visual_verdict",
+            "confidence", "desktop_top_observations", "desktop_mid_observations",
+            "mobile_top_observations", "mobile_mid_observations", "desktop_observations",
+            "mobile_observations", "major_issues", "positive_signals",
+            "recommended_redesign_focus", "limitations",
+        }
+        missing_keys = sorted(required_keys - review.keys())
+        extra_keys = sorted(review.keys() - required_keys)
+        if missing_keys:
+            errors.append("response is missing required keys: " + ", ".join(missing_keys))
+        if extra_keys:
+            errors.append("response has unexpected keys: " + ", ".join(extra_keys))
         if review.get("candidate_id") != context.get("candidate_id"):
             errors.append("candidate_id does not match the source candidate")
         if review.get("website_url") != context.get("website_url"):
