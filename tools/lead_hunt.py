@@ -549,7 +549,7 @@ def build_chatgpt_prompt(query: dict, limit: int) -> str:
 
 def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
                           result_limit: int) -> tuple[list[dict], dict]:
-    """Run the git-inference ChatGPT browser runner under the workflow's Xvfb display."""
+    """Run the ChatGPT browser runner under the workflow's Xvfb display."""
     index = int(query["query_index"])
     query_dir = run_dir / "chatgpt" / f"query_{index:04d}"
     query_dir.mkdir(parents=True, exist_ok=True)
@@ -681,7 +681,7 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
     manifest = {"run_key": run_dir.name, "region": args.region, "engine": "chatgpt_web_ui",
                 "categories": split_values(args.categories), "locations": split_values(args.locations),
                 "configured_queries": len(queries), "input_fingerprint": fingerprint(queries, args.region, "chatgpt_web_ui"),
-                "workflow": "GitHub Actions Playwright headed Chromium under Xvfb; git-inference ChatGPT response runner",
+                "workflow": "GitHub Actions Playwright headed Chromium under Xvfb; ChatGPT response runner",
                 "created_at": now_iso(), "updated_at": now_iso(), "automated_scoring_is_final": False,
                 "review_policy": "ChatGPT discovery evidence, direct-site signals, Hermes visual review, and human decisions remain separate"}
     if manifest_path.exists():
@@ -705,7 +705,7 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
     logger.emit("batch_configuration", configured_query_count=len(queries), pending_query_count=len(pending),
                 selected_query_count=len(batch), max_queries=args.max_queries,
                 max_sites_per_query=args.max_sites_per_query, search_engine="chatgpt_web_ui",
-                browser_runner="git-inference ChatGPT Playwright runner", display="Xvfb")
+                browser_runner="ChatGPT Playwright runner", display="Xvfb")
     if not batch:
         progress = save_run(run_dir, queries, records, candidates, manifest)
         logger.emit("batch_no_pending_queries")

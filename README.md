@@ -1,6 +1,6 @@
 # ChatGPT Website Lead Hunting
 
-This repository runs local-business discovery and website review in GitHub Actions. The discovery step asks ChatGPT through the same headed Playwright/Xvfb runner used by `benspilker/git-inference`; the site-review step checks candidate websites directly and captures desktop and mobile screenshots.
+This repository runs local-business discovery and website review in GitHub Actions. The discovery step asks ChatGPT through a headed Playwright/Xvfb runner; the site-review step checks candidate websites directly and captures desktop and mobile screenshots.
 
 ## Start or continue a run
 
@@ -18,7 +18,7 @@ The workflows use Node.js 24-compatible action releases: `actions/checkout@v5` o
 
 ## ChatGPT browser runner
 
-The production workflow runs the ChatGPT UI with headed Chromium under Xvfb using `xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24'`. It uses `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules from the successful `git-inference` ChatGPT pipeline (source revision `1b5654d8ff4cbd4e8d870a27eb44af878520ecf5`). The response wait, settle, and retry behavior stays in that runner; the lead-hunt code calls it as a child process and consumes its validated JSON response. The ChatGPT message selector also supports the anonymous shell's current `data-message-role="assistant"` markup and ignores empty trailing assistant rows.
+The production workflow runs the ChatGPT UI with headed Chromium under Xvfb using `xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24'`. It uses `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules. The response wait, settle, and retry behavior stays in that runner; the lead-hunt code calls it as a child process and consumes its validated JSON response. The ChatGPT message selector also supports the anonymous shell's current `data-message-role="assistant"` markup and ignores empty trailing assistant rows.
 
 Each query has two outer attempts, and the runner itself can retry a failed send after refreshing the chat. Successful response text, parsed JSON, runner metadata, and a full-page ChatGPT screenshot are saved in `runs/<run_key>/chatgpt/query_NNNN/`. Failure screenshots and HTML diagnostics are retained there too. The temporary browser profile is deleted after each attempt and is never committed.
 

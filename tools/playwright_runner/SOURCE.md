@@ -1,6 +1,6 @@
-The ChatGPT browser runner and its Playwright support modules were copied from
-`https://github.com/benspilker/git-inference` at revision
-`1b5654d8ff4cbd4e8d870a27eb44af878520ecf5`.
+The ChatGPT browser runner and its Playwright support modules are used by the
+GitHub Actions lead-hunting workflow to submit prompts, wait for completed
+responses, and retry failed sends.
 
 The response-submission, wait/settle, and retry flow in
 `chatgpt_file_playwright_anonymous_ci.py` and `stage_runner.py` is retained. The lead-hunting
