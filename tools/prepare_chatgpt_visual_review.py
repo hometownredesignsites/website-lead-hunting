@@ -39,7 +39,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
     viewport_crop_heights = {"desktop": 900, "mobile": 844}
-    mid_page_scroll_fractions = {"desktop": 0.25, "mobile": 0.48}
+    mid_page_scroll_fractions = {"desktop": 0.35, "mobile": 0.60}
     for viewport in ("desktop", "mobile"):
         record = screenshot_record.get(viewport) or {}
         if record.get("status") != "saved" or not record.get("path"):
@@ -94,7 +94,7 @@ def main() -> int:
                         for item in images],
     }
     instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
-Use only what is visible in the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page; the mid views are viewport crops taken at 25% of the desktop and 48% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that screenshots cannot establish (such as current business status, licensing, technology, or whether forms work). If an image is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined evidence is insufficient.
+Use only what is visible in the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page; the mid views are viewport crops taken at 35% of the desktop and 60% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that screenshots cannot establish (such as current business status, licensing, technology, or whether forms work). If an image is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined evidence is insufficient.
 
 Score redesign opportunity with an integer from 0 to 100: higher means stronger visual evidence that a redesign could materially improve the site. Use high for one severe flaw or several major flaws that materially harm trust, readability, navigation, mobile usability, or the ability to request service. Use medium when the site is functional and credible but has a meaningful opportunity such as dated styling, weak hierarchy, sparse/poor project photos, text-heavy layout, or confusing navigation. Use pass when it appears credible, usable, reasonably current, and presents services/contact clearly; minor cosmetic issues alone are insufficient. A dated look and mobile failure do not both need to be present for high. Score bands: high=70-100, medium=35-69, pass=0-34. Use uncertain with a null score when evidence is insufficient.
 
