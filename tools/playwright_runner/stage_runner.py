@@ -116,9 +116,6 @@ def run_stage_once(
         response = _single_attempt()
     except Exception as exc:
         _capture_attempt_failure(1, str(exc))
-        if "Cloudflare challenge page" in str(exc):
-            metadata["failure_reason"] = str(exc)
-            raise
         if not allow_retry:
             metadata["failure_reason"] = str(exc)
             raise

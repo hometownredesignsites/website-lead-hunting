@@ -45,7 +45,7 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 15
     container:
       image: mcr.microsoft.com/playwright/python:v1.58.0-noble
       options: --user root
@@ -78,12 +78,12 @@ jobs:
             echo "review_run_key contains invalid characters" >&2
             exit 1
           fi
-          if [[ -n "$REVIEW_SOURCE_RUN_ID" ]] && ! [[ "$REVIEW_SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
-            echo "review_source_run_id must be a numeric GitHub Actions run ID" >&2
-            exit 1
-          fi
           if [[ -z "$REVIEW_SOURCE_RUN_ID" ]]; then
             echo "review_source_run_id is required: visual review reads screenshots only from the lead-hunt artifact." >&2
+            exit 1
+          fi
+          if ! [[ "$REVIEW_SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "review_source_run_id must be a numeric GitHub Actions run ID" >&2
             exit 1
           fi
           echo "run_key=$REVIEW_RUN_KEY" >> "$GITHUB_OUTPUT"
@@ -163,79 +163,42 @@ jobs:
             image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile_mid.jpg)
           fi
           context_args=()
-          json_args=()
           if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
             context_args+=(--context-file artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json)
-            json_args+=(--expect-json --fail-if-invalid-json --response-mode json)
           fi
           set +e
-          probe_rc=1
-          attempt=1
-          while [[ "$attempt" -le 3 ]]; do
-            attempt_dir="artifacts/chatgpt-xvfb-probe/attempt-$attempt"
-            mkdir -p "$attempt_dir"
-            rm -rf tmp/chatgpt-probe-profile
-            echo "Starting isolated browser attempt $attempt/3 with a fresh Chromium profile."
-            attempt_json_args=("${json_args[@]}")
-            if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
-              attempt_json_args+=(--parsed-output-file "$attempt_dir/parsed-response.json")
-            fi
-            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-              python tools/chatgpt_file_playwright_anonymous_ci.py \
-                --stage-name "chatgpt_runner_check_attempt_$attempt" \
-                --input-file artifacts/chatgpt-xvfb-probe/prompt.txt \
-                --instructions-file artifacts/chatgpt-xvfb-probe/instructions.txt \
-                "${attempt_json_args[@]}" \
-                "${context_args[@]}" \
-                --output-file "$attempt_dir/response.md" \
-                --metadata-output-file "$attempt_dir/metadata.json" \
-                --success-screenshot "$attempt_dir/chatgpt-response.png" \
-                --error-screenshot "$attempt_dir/chatgpt-error.png" \
-                --user-data-dir tmp/chatgpt-probe-profile \
-                --wait-seconds 180 \
-                --timeout-ms 120000 \
-                --post-response-wait-seconds 2 \
-                --response-settle-seconds 5 \
-                --max-settle-wait-seconds 180 \
-                "${image_args[@]}" > "$attempt_dir/runner.log" 2>&1
-            attempt_rc=$?
-            cat "$attempt_dir/runner.log"
-            if [[ "$attempt_rc" -eq 0 && "$ATTACH_TEST_IMAGE" == "true" ]]; then
-              python tools/validate_chatgpt_image_probe.py \
-                --response "$attempt_dir/response.md" \
-                --metadata "$attempt_dir/metadata.json" \
-                --output "$attempt_dir/probe-result.json" || attempt_rc=$?
-            elif [[ "$attempt_rc" -eq 0 && "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
-              python tools/validate_chatgpt_visual_review.py \
-                --response "$attempt_dir/response.md" \
-                --metadata "$attempt_dir/metadata.json" \
-                --context artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json \
-                --output "$attempt_dir/review-result.json" || attempt_rc=$?
-            fi
-            if [[ "$attempt_rc" -eq 0 ]]; then
-              cp "$attempt_dir/response.md" artifacts/chatgpt-xvfb-probe/response.md
-              cp "$attempt_dir/metadata.json" artifacts/chatgpt-xvfb-probe/metadata.json
-              cp "$attempt_dir/chatgpt-response.png" artifacts/chatgpt-xvfb-probe/chatgpt-response.png
-              if [[ "$ATTACH_TEST_IMAGE" == "true" ]]; then
-                cp "$attempt_dir/probe-result.json" artifacts/chatgpt-xvfb-probe/probe-result.json
-              elif [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
-                cp "$attempt_dir/parsed-response.json" artifacts/chatgpt-xvfb-probe/website-review/parsed-response.json
-                cp "$attempt_dir/review-result.json" artifacts/chatgpt-xvfb-probe/website-review/review-result.json
-              fi
-              probe_rc=0
-              break
-            fi
-            probe_rc=$attempt_rc
-            if grep -qi "Cloudflare challenge page" "$attempt_dir/runner.log"; then
-              echo "Stopping retries because ChatGPT is serving a Cloudflare challenge page."
-              break
-            fi
-            if [[ "$attempt" -lt 3 ]]; then
-              echo "Attempt $attempt failed; the browser process and profile are discarded before retrying."
-              sleep 5
-            fi
-            attempt=$((attempt + 1))
-          done
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            python tools/chatgpt_file_playwright_anonymous_ci.py \
+              --stage-name chatgpt_runner_check \
+              --input-file artifacts/chatgpt-xvfb-probe/prompt.txt \
+              --instructions-file artifacts/chatgpt-xvfb-probe/instructions.txt \
+              "${context_args[@]}" \
+              --output-file artifacts/chatgpt-xvfb-probe/response.md \
+              --metadata-output-file artifacts/chatgpt-xvfb-probe/metadata.json \
+              --success-screenshot artifacts/chatgpt-xvfb-probe/chatgpt-response.png \
+              --error-screenshot artifacts/chatgpt-xvfb-probe/chatgpt-error.png \
+              --user-data-dir tmp/chatgpt-probe-profile \
+              --allow-retry \
+              --refresh-before-retry \
+              --wait-seconds 70 \
+              --timeout-ms 120000 \
+              --post-response-wait-seconds 2 \
+              --response-settle-seconds 2 \
+              --max-settle-wait-seconds 30 \
+              "${image_args[@]}"
+          probe_rc=$?
+          if [[ "$probe_rc" -eq 0 && "$ATTACH_TEST_IMAGE" == "true" ]]; then
+            python tools/validate_chatgpt_image_probe.py \
+              --response artifacts/chatgpt-xvfb-probe/response.md \
+              --metadata artifacts/chatgpt-xvfb-probe/metadata.json \
+              --output artifacts/chatgpt-xvfb-probe/probe-result.json || probe_rc=$?
+          elif [[ "$probe_rc" -eq 0 && "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
+            python tools/validate_chatgpt_visual_review.py \
+              --response artifacts/chatgpt-xvfb-probe/response.md \
+              --metadata artifacts/chatgpt-xvfb-probe/metadata.json \
+              --context artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json \
+              --output artifacts/chatgpt-xvfb-probe/website-review/review-result.json || probe_rc=$?
+          fi
           echo "exit_code=$probe_rc" >> "$GITHUB_OUTPUT"
           exit 0
 

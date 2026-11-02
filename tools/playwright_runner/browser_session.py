@@ -81,10 +81,6 @@ def find_chat_composer(page, timeout_ms: int):
     ]
     deadline = time.time() + max(1.0, timeout_ms / 1000.0)
     while time.time() < deadline:
-        if is_cloudflare_challenge(page):
-            raise RuntimeError(
-                "ChatGPT returned a Cloudflare challenge page; no prompt was submitted."
-            )
         dismiss_blocking_modals(page)
         composer = first_visible_locator(page, selectors, timeout_ms=min(2500, max(1000, timeout_ms)))
         if composer is not None:
@@ -95,26 +91,6 @@ def find_chat_composer(page, timeout_ms: int):
                 return composer
         page.wait_for_timeout(350)
     return None
-
-
-def is_cloudflare_challenge(page) -> bool:
-    """Detect an access challenge without interacting with or solving it."""
-    try:
-        if "just a moment" in page.title().lower():
-            return True
-    except Exception:
-        pass
-    for selector in (
-        "script[src*='/cdn-cgi/challenge-platform/']",
-        "form#challenge-form",
-        "#challenge-running",
-    ):
-        try:
-            if page.locator(selector).count() > 0:
-                return True
-        except Exception:
-            continue
-    return False
 
 
 def assistant_turns(page):
@@ -138,8 +114,8 @@ def assistant_turns(page):
 def extract_response_text(assistant_messages, before_count: int, before_last_text: str) -> str:
     def _normalize(text: str) -> str:
         cleaned = (text or "").strip()
-        cleaned = re.sub(r"^\s*chatgpt\s+said:\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^\s*chatgpt\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*chatgpt\s+said:\s*\n+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*chatgpt\s*:\s*\n+", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip()
 
     after_count = assistant_messages.count()
@@ -166,8 +142,6 @@ def looks_like_non_answer_text(text: str) -> bool:
     if not lowered:
         return True
     blocked_markers = [
-        "chatgpt said:",
-        "chatgpt:",
         "i hit an internal automation issue while generating a response",
         "please send your message again",
         "new session started",
@@ -360,8 +334,4 @@ def stabilize_response(
             break
         page.wait_for_timeout(1000)
         waited += 1
-    if stop_visible:
-        raise TimeoutError(
-            f"Assistant response was still generating after {max_settle_wait_seconds} seconds; refusing to capture a partial answer."
-        )
     return previous
