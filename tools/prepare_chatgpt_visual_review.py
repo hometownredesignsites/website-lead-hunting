@@ -120,8 +120,32 @@ Use only what is visible in the four supplied screenshots: desktop_top.jpg, desk
 
 Score redesign opportunity with an integer from 0 to 100: higher means stronger visual evidence that a redesign could materially improve the site. Use high for one severe flaw or several major flaws that materially harm trust, readability, navigation, mobile usability, or the ability to request service. Use medium when the site is functional and credible but has a meaningful opportunity such as dated styling, weak hierarchy, sparse/poor project photos, text-heavy layout, or confusing navigation. Use pass when it appears credible, usable, reasonably current, and presents services/contact clearly; minor cosmetic issues alone are insufficient. A dated look and mobile failure do not both need to be present for high. Score bands: high=70-100, medium=35-69, pass=0-34. Use uncertain with a null score when evidence is insufficient.
 
-Return only valid JSON with exactly these keys: candidate_id, website_url, visual_opportunity_score, visual_verdict, confidence, desktop_top_observations, desktop_mid_observations, mobile_top_observations, mobile_mid_observations, desktop_observations, mobile_observations, major_issues, positive_signals, recommended_redesign_focus, limitations. candidate_id and website_url must match the supplied context. visual_verdict must be high, medium, pass, or uncertain. confidence must be low, medium, or high. All observation, issue, signal, focus, and limitation fields must be arrays of concise strings. Anchor each observation to its named top or mid view. The desktop_observations and mobile_observations fields should summarize evidence across both views. Do not claim a check succeeded unless the screenshots show that evidence."""
-    prompt = "Assess all four supplied screenshots and score the visual redesign opportunity under the rubric. Match filenames to the viewport and view names in the supplied context. Use the candidate context only for identity; base the score on visible screenshot evidence across the top and mid-page views."
+Return a concise plain-text assessment, not JSON. Use this exact labeled format so the result can be converted reliably:
+Visual opportunity score: <integer 0-100>/100, or "uncertain (no score)" when the visual evidence is insufficient
+Verdict: <high|medium|pass|uncertain>
+Confidence: <low|medium|high>
+Desktop top observations:
+- <one concise observation tied to desktop_top.jpg>
+Desktop mid observations:
+- <one concise observation tied to desktop_mid.jpg>
+Mobile top observations:
+- <one concise observation tied to mobile_top.jpg>
+Mobile mid observations:
+- <one concise observation tied to mobile_mid.jpg>
+Desktop observations:
+- <summary across both desktop views>
+Mobile observations:
+- <summary across both mobile views>
+Major issues:
+- <issue, or "None observed">
+Positive signals:
+- <signal, or "None observed">
+Recommended redesign focus:
+- <focus area, or "None identified">
+Limitations:
+- <limitation, or "None noted">
+Use at least one concise bullet in every section. Do not add a preamble. Keep the explicit score and verdict near the top. The Python workflow will normalize this labeled response into JSON. Do not claim a check succeeded unless the screenshots show that evidence."""
+    prompt = "Assess all four supplied screenshots and score the visual redesign opportunity under the rubric. Match filenames to the viewport and view names in the supplied context. Use the candidate context only for identity; base the score on visible screenshot evidence across the top and mid-page views. Return the concise labeled text format requested in the instructions."
     (output_dir / "candidate-context.json").write_text(json.dumps(context, indent=2) + "\n", encoding="utf-8")
     (output_dir / "instructions.txt").write_text(instructions + "\n", encoding="utf-8")
     (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")

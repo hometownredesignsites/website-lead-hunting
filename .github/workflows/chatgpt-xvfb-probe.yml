@@ -166,6 +166,10 @@ jobs:
           if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
             context_args+=(--context-file artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json)
           fi
+          response_contract_args=()
+          if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
+            response_contract_args+=(--expect-review-score)
+          fi
           set +e
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python tools/chatgpt_file_playwright_anonymous_ci.py \
@@ -185,6 +189,7 @@ jobs:
               --post-response-wait-seconds 2 \
               --response-settle-seconds 2 \
               --max-settle-wait-seconds 30 \
+              "${response_contract_args[@]}" \
               "${image_args[@]}"
           probe_rc=$?
           if [[ "$probe_rc" -eq 0 && "$ATTACH_TEST_IMAGE" == "true" ]]; then

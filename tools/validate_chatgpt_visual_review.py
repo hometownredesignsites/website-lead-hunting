@@ -4,9 +4,79 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from playwright_runner.prompt_contracts import extract_json_payload
+
+
+SECTION_KEYS = {
+    "desktop top observations": "desktop_top_observations",
+    "desktop mid observations": "desktop_mid_observations",
+    "mobile top observations": "mobile_top_observations",
+    "mobile mid observations": "mobile_mid_observations",
+    "desktop observations": "desktop_observations",
+    "mobile observations": "mobile_observations",
+    "major issues": "major_issues",
+    "positive signals": "positive_signals",
+    "recommended redesign focus": "recommended_redesign_focus",
+    "limitations": "limitations",
+}
+
+
+def parse_labeled_text(response_text: str, context: dict) -> dict | None:
+    score_match = re.search(
+        r"^\s*Visual opportunity score\s*:\s*(?:(\d{1,3})\s*(?:/\s*100|out of 100)?|uncertain(?:\s*\(no score\))?)\s*$",
+        response_text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    verdict_match = re.search(
+        r"^\s*Verdict\s*:\s*(high|medium|pass|uncertain)\s*$",
+        response_text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    confidence_match = re.search(
+        r"^\s*Confidence\s*:\s*(low|medium|high)\s*$",
+        response_text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    if not score_match or not verdict_match or not confidence_match:
+        return None
+
+    verdict = verdict_match.group(1).lower()
+    score = int(score_match.group(1)) if score_match.group(1) else None
+    if (score is None) != (verdict == "uncertain"):
+        return None
+
+    observations = {key: [] for key in SECTION_KEYS.values()}
+    current_section = None
+    scalar_line = re.compile(r"^\s*(?:Visual opportunity score|Verdict|Confidence)\s*:", re.IGNORECASE)
+    bullet_prefix = re.compile(r"^\s*(?:[-*•]+|\d+[.)])\s*")
+    for line in response_text.splitlines():
+        if scalar_line.match(line):
+            current_section = None
+            continue
+        heading = re.match(r"^\s*([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$", line)
+        if heading:
+            current_section = SECTION_KEYS.get(heading.group(1).strip().lower())
+            if current_section and heading.group(2).strip():
+                item = bullet_prefix.sub("", heading.group(2)).strip()
+                if item:
+                    observations[current_section].append(item)
+            continue
+        if current_section and line.strip():
+            item = bullet_prefix.sub("", line).strip()
+            if item and item.lower() not in {"none observed", "none identified", "none noted"}:
+                observations[current_section].append(item)
+
+    return {
+        "candidate_id": context.get("candidate_id"),
+        "website_url": context.get("website_url"),
+        "visual_opportunity_score": score,
+        "visual_verdict": verdict,
+        "confidence": confidence_match.group(1).lower(),
+        **observations,
+    }
 
 
 def main() -> int:
@@ -21,13 +91,17 @@ def main() -> int:
     metadata = json.loads(args.metadata.read_text(encoding="utf-8"))
     context = json.loads(args.context.read_text(encoding="utf-8"))
     review = extract_json_payload(response_text)
+    response_format = "json"
+    if review is None:
+        review = parse_labeled_text(response_text, context)
+        response_format = "labeled_text" if review is not None else "unparsed"
     attachment_records = metadata.get("image_attachments") or []
     uploaded_names = {item.get("filename") for item in attachment_records
                       if item.get("status") == "uploaded"}
     expected_names = {item.get("filename") for item in context.get("screenshots", [])}
     errors: list[str] = []
     if not review:
-        errors.append("response is not a JSON object")
+        errors.append("response has no parseable JSON object or labeled assessment scorecard")
     else:
         if review.get("candidate_id") != context.get("candidate_id"):
             errors.append("candidate_id does not match the source candidate")
@@ -69,6 +143,7 @@ def main() -> int:
 
     result = {
         "status": "passed" if not errors else "failed",
+        "response_format": response_format,
         "candidate_id": context.get("candidate_id"),
         "expected_uploaded_images": sorted(expected_names),
         "confirmed_uploaded_images": sorted(uploaded_names),

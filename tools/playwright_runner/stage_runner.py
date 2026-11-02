@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from .prompt_contracts import extract_json_payload
 from .recovery import click_retry_if_visible, refresh_chat
 
 
-class EmptyResponseFollowupError(RuntimeError):
+class ResponseFollowupError(RuntimeError):
     """Raised when ChatGPT stays silent after a same-chat text follow-up."""
 
 
@@ -34,6 +35,7 @@ def run_stage_once(
     stage_name: str = "generic",
     error_screenshot: Path | None = None,
     image_files: list[Path] | None = None,
+    expect_review_score: bool = False,
 ) -> tuple[str, dict]:
     metadata = {
         "attempt": 1,
@@ -46,7 +48,8 @@ def run_stage_once(
         "attempt_failures": [],
         "image_attachment": None,
         "image_attachments": [],
-        "empty_response_followup_used": False,
+        "response_followup_used": False,
+        "response_followup_reason": None,
     }
     start = time.time()
 
@@ -106,12 +109,19 @@ def run_stage_once(
             before_last_text=before_last_text,
             wait_seconds=wait_seconds,
         )
+        followup_reason = None
         if not response_text:
-            metadata["empty_response_followup_used"] = True
+            followup_reason = "empty_response"
+        elif (expect_review_score and extract_json_payload(response_text) is None
+              and not re.search(r"^\s*Visual opportunity score\s*:", response_text, re.IGNORECASE | re.MULTILINE)):
+            followup_reason = "missing_scorecard"
+        if followup_reason:
+            metadata["response_followup_used"] = True
+            metadata["response_followup_reason"] = followup_reason
             followup_composer = find_chat_composer(page, timeout_ms=timeout_ms)
             if followup_composer is None:
-                raise EmptyResponseFollowupError(
-                    "Assistant response was empty and no composer was available for a same-chat follow-up."
+                raise ResponseFollowupError(
+                    "ChatGPT response needed a follow-up, but no composer was available in the same chat."
                 )
             followup_messages = assistant_turns(page)
             followup_before_count = followup_messages.count()
@@ -121,12 +131,21 @@ def run_stage_once(
                     followup_before_last_text = followup_messages.last.inner_text().strip()
                 except Exception:
                     followup_before_last_text = ""
-            followup_prompt = (
-                "Your previous response was empty. Please retry the visual assessment using the four "
-                "screenshots already attached and the candidate context in this chat. Follow the original "
-                "rubric and output contract. Return only the required JSON object, without a preamble or "
-                "code fence."
-            )
+            if followup_reason == "empty_response":
+                followup_prompt = (
+                    "Your previous response was empty. Please retry the visual assessment using the four "
+                    "screenshots already attached and the candidate context in this chat. Follow the original "
+                    "rubric and output format. Include the explicit score, verdict, confidence, and labeled "
+                    "observation sections. Return the concise plain-text scorecard without a preamble."
+                )
+            else:
+                followup_prompt = (
+                    "Your previous response did not include the required explicit scorecard. Please retry the "
+                    "visual assessment using the four screenshots already attached and the candidate context "
+                    "in this chat. Follow the original rubric and output format, include the labeled score, "
+                    "verdict, confidence, and observation sections, and return only the concise plain-text "
+                    "scorecard without a preamble."
+                )
             send_prompt(page, followup_composer, followup_prompt)
             page.wait_for_timeout(1200)
             followup_messages = assistant_turns(page)
@@ -138,7 +157,7 @@ def run_stage_once(
                 wait_seconds=wait_seconds,
             )
             if not response_text:
-                raise EmptyResponseFollowupError(
+                raise ResponseFollowupError(
                     "Assistant response remained empty after the same-chat text follow-up."
                 )
             assistant_messages = followup_messages
@@ -155,7 +174,7 @@ def run_stage_once(
         response = _single_attempt()
     except Exception as exc:
         _capture_attempt_failure(1, str(exc))
-        if isinstance(exc, EmptyResponseFollowupError):
+        if isinstance(exc, ResponseFollowupError):
             metadata["failure_reason"] = str(exc)
             raise
         if not allow_retry:

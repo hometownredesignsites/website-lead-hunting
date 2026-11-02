@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parsed-output-file")
     parser.add_argument("--metadata-output-file")
     parser.add_argument("--expect-json", action="store_true")
+    parser.add_argument("--expect-review-score", action="store_true")
     parser.add_argument("--fail-if-invalid-json", action="store_true")
     parser.add_argument("--response-mode", default="text", choices=["text", "markdown", "json"])
     parser.add_argument("--url", default="https://chatgpt.com/")
@@ -147,6 +148,7 @@ def run() -> int:
                     stage_name=args.stage_name,
                     error_screenshot=error_screenshot,
                     image_files=image_files,
+                    expect_review_score=bool(args.expect_review_score),
                 )
                 run_metadata["page_refreshed"] = bool(run_metadata.get("page_refreshed")) or bool(args.refresh_before_send)
                 run_metadata["thread_reused"] = not started_new_chat
