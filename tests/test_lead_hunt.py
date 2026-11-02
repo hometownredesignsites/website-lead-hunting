@@ -73,6 +73,17 @@ class LeadHuntTests(unittest.TestCase):
         self.assertIn("score_basis", result)
         self.assertNotIn("human_review", result)
 
+    def test_technical_score_uses_measured_mobile_horizontal_overflow(self):
+        base = {
+            "https": True,
+            "desktop": {"viewportMeta": True, "hasContactPath": True, "hasCta": True,
+                        "titlePresent": True, "descriptionPresent": True, "imageCount": 0},
+        }
+        clear = score_signals({**base, "mobile": {"horizontalOverflowPx": 0}})
+        overflow = score_signals({**base, "mobile": {"horizontalOverflowPx": 48}})
+        self.assertEqual(clear["signals"]["mobile_overflow"], "clear")
+        self.assertEqual(overflow["signals"]["mobile_overflow"], "issue")
+
     def test_detects_duckduckgo_human_verification_challenge(self):
         body = "Unfortunately, bots use DuckDuckGo too. Please complete the following challenge to confirm this search was made by a human. Select all squares containing a duck."
         self.assertEqual(challenge_text_reason("https://html.duckduckgo.com/html/", "DuckDuckGo", body),

@@ -450,6 +450,7 @@ async def page_metrics(page) -> dict:
         viewportMeta: !!document.querySelector('meta[name="viewport"]'),
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: document.documentElement.clientWidth,
+        horizontalOverflowPx: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
         imageCount: [...document.images].length,
         loadedImageCount: [...document.images].filter(i => i.complete && i.naturalWidth > 0).length,
         hasContactPath: [...document.querySelectorAll('a[href]')].some(a => /contact|location|visit|call|phone/i.test((a.innerText||'')+' '+a.href)),
