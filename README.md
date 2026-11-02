@@ -64,3 +64,5 @@ Screenshots are committed with the ledgers so the evidence stays with the run. G
 python -m unittest discover -s tests -v
 python -m py_compile tools/lead_hunt.py tools/chatgpt_file_playwright_anonymous_ci.py tools/playwright_runner/browser_session.py
 ```
+
+Visual-review helper outputs are written locally; commit and push the run folder if you want them persisted to GitHub.
