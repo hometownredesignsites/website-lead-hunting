@@ -644,7 +644,7 @@ def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
                         candidate_count=len(results), duration_ms=duration_ms,
                         response_file=attempt_record["response_file"], screenshot=attempt_record["screenshot"])
             metadata = json.loads(metadata_file.read_text(encoding="utf-8")) if metadata_file.exists() else {}
-                    return results, {"attempt_history": attempt_records, "attempt": attempt,
+            return results, {"attempt_history": attempt_records, "attempt": attempt,
                              "prompt_file": str(prompt_file.relative_to(run_dir)).replace("\\", "/"),
                              "instructions_file": str(instructions_file.relative_to(run_dir)).replace("\\", "/"),
                              "response_file": attempt_record["response_file"],
