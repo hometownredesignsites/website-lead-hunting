@@ -8,7 +8,7 @@ This repository runs local-business discovery and website review in GitHub Actio
 2. Set a stable `run_key`, categories and named locations (one per line), and the batch/site limits.
 3. Use the same key and inputs to resume. A changed category/location/region set requires a new key.
 4. The workflow processes up to 20 pending category/location prompts in a run, and checks up to 8 direct business websites per prompt. The default batch is smaller to keep runs manageable.
-5. The Action commits the run folder to the selected branch and also uploads a seven-day backup artifact.
+5. The Action commits run data to the selected branch and also uploads a seven-day artifact. The **Commit screenshots** boolean defaults to `true`; turn it off to leave screenshot image files out of the branch commit while keeping them in the artifact.
 
 The default inputs target kitchen remodelers in Westminster, Colorado.
 
