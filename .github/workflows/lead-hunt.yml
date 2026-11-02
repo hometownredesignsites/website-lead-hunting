@@ -6,22 +6,12 @@ on:
       run_key:
         description: "Stable run folder key; reuse it to continue the same saved run"
         required: true
-        default: "westminster-kitchen-chatgpt"
-        type: string
-      categories:
-        description: "Business categories, one per line"
-        required: true
-        default: "Kitchen remodelers"
-        type: string
-      locations:
-        description: "Named locations, one per line"
-        required: true
-        default: "Westminster, CO"
+        default: "csv-market-lead-hunt"
         type: string
       region:
-        description: "Human-readable target region"
+        description: "Human-readable market/region label for reports"
         required: true
-        default: "Westminster, Colorado"
+        default: "Colorado"
         type: string
       max_queries:
         description: "Pending queries to process in this batch (1-20)"
@@ -46,10 +36,16 @@ on:
           - "3"
           - "5"
           - "8"
+          - "10"
       commit_screenshots:
-        description: "Commit screenshot image files to the branch (artifacts always include them)"
+        description: "Commit screenshot image files to the branch (temporary inference artifact is kept either way)"
         required: true
-        default: true
+        default: false
+        type: boolean
+      capture_google_evidence:
+        description: "Capture raw Google result pages for this bounded comparison batch"
+        required: true
+        default: false
         type: boolean
 
 permissions:
@@ -80,16 +76,31 @@ jobs:
       - name: Run offline regression checks
         run: python -m unittest discover -s tests -v
 
+      - name: Plan CSV query volume
+        shell: bash
+        env:
+          MAX_SITES_PER_QUERY: ${{ inputs.max_sites_per_query }}
+          MAX_QUERIES: ${{ inputs.max_queries }}
+        run: |
+          python tools/plan_run.py --max-sites-per-query "$MAX_SITES_PER_QUERY" \
+            --queries-per-job "$MAX_QUERIES" | tee plan.json
+          {
+            echo '## CSV query plan'
+            echo '```json'
+            cat plan.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run bounded ChatGPT research and website assessment batch
         id: scan
         shell: bash
         env:
           RUN_KEY: ${{ inputs.run_key }}
-          CATEGORIES: ${{ inputs.categories }}
-          LOCATIONS: ${{ inputs.locations }}
           REGION: ${{ inputs.region }}
           MAX_QUERIES: ${{ inputs.max_queries }}
           MAX_SITES_PER_QUERY: ${{ inputs.max_sites_per_query }}
+          CAPTURE_GOOGLE_EVIDENCE: ${{ inputs.capture_google_evidence }}
+          COMMIT_SCREENSHOTS: ${{ inputs.commit_screenshots }}
         run: |
           if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "run_key must contain only letters, digits, dot, underscore, and hyphen" >&2
@@ -97,19 +108,47 @@ jobs:
             exit 0
           fi
           mkdir -p runs
+          capture_args=()
+          if [[ "$CAPTURE_GOOGLE_EVIDENCE" == "true" ]]; then
+            capture_args+=(--capture-google-evidence)
+          fi
           set +e
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python tools/lead_hunt.py \
               --engine chatgpt \
-              --categories "$CATEGORIES" \
-              --locations "$LOCATIONS" \
+              --categories-csv config/business_categories.csv \
+              --cities-csv config/cities.csv \
               --region "$REGION" \
               --state-dir "runs/$RUN_KEY" \
               --max-queries "$MAX_QUERIES" \
-              --max-sites-per-query "$MAX_SITES_PER_QUERY"
+              --max-sites-per-query "$MAX_SITES_PER_QUERY" \
+              --commit-screenshots "$COMMIT_SCREENSHOTS" \
+              "${capture_args[@]}"
           scan_rc=$?
           echo "exit_code=$scan_rc" >> "$GITHUB_OUTPUT"
           exit 0
+
+      - name: Validate ledgers and write run summary
+        id: validate
+        if: always()
+        shell: bash
+        env:
+          RUN_KEY: ${{ inputs.run_key }}
+        run: |
+          if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || [[ ! -d "runs/$RUN_KEY" ]]; then
+            echo "No run folder to validate."
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          set +e
+          python tools/validate_run.py --run-dir "runs/$RUN_KEY" --write-summary > run-validation.json
+          validation_rc=$?
+          set -e
+          cat run-validation.json
+          if [[ -f "runs/$RUN_KEY/RUN_SUMMARY.md" ]]; then
+            cat "runs/$RUN_KEY/RUN_SUMMARY.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "exit_code=$validation_rc" >> "$GITHUB_OUTPUT"
 
       - name: Commit findings and optionally screenshots to the selected branch
         if: always()
@@ -155,8 +194,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Report scan outcome
-        if: always() && steps.scan.outputs.exit_code != '0'
+      - name: Report scan or validation outcome
+        if: always() && (steps.scan.outputs.exit_code != '0' || steps.validate.outputs.exit_code != '0')
         run: |
-          echo "Lead-hunt runner exited with ${{ steps.scan.outputs.exit_code }}. Any progress and evidence were committed when available."
+          echo "Lead-hunt runner exited with ${{ steps.scan.outputs.exit_code }}; validator exited with ${{ steps.validate.outputs.exit_code }}. Any progress and evidence were committed when available."
           exit 1

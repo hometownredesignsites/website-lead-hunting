@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import hashlib
 import ipaddress
 import json
@@ -124,6 +125,38 @@ def split_values(value: str) -> list[str]:
     if len({v.casefold() for v in values}) != len(values):
         raise ValueError("Input contains duplicate values")
     return values
+
+
+def read_csv_values(path: Path, column: str) -> list[str]:
+    """Read an ordered, unique list from a single named CSV column."""
+    with path.open("r", encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        if not reader.fieldnames or column not in reader.fieldnames:
+            raise ValueError(f"{path} must contain a {column!r} column")
+        values = [(row.get(column) or "").strip() for row in reader]
+    values = [value for value in values if value]
+    if not values:
+        raise ValueError(f"{path} contains no non-empty values in column {column!r}")
+    if len({value.casefold() for value in values}) != len(values):
+        raise ValueError(f"{path} contains duplicate values in column {column!r}")
+    return values
+
+
+def resolved_inputs(args: argparse.Namespace) -> tuple[list[str], list[str]]:
+    if args.categories_csv or args.cities_csv:
+        if not args.categories_csv or not args.cities_csv:
+            raise ValueError("Both --categories-csv and --cities-csv are required together")
+        categories = read_csv_values(args.categories_csv, "category")
+        locations = read_csv_values(args.cities_csv, "city")
+        return categories, locations
+    if not args.categories or not args.locations:
+        raise ValueError("Provide both --categories/--locations or both CSV files")
+    return split_values(args.categories), split_values(args.locations)
+
+
+def csv_input_metadata(path: Path, column: str) -> dict:
+    return {"path": str(path.as_posix()), "column": column,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def host_of(url: str | None) -> str:
@@ -547,6 +580,76 @@ def build_chatgpt_prompt(query: dict, limit: int) -> str:
             "Return only the JSON object specified in the instructions.")
 
 
+async def capture_google_search_evidence(page, query: dict, run_dir: Path,
+                                         logger: BehaviorLogger) -> dict:
+    """Capture the first Google results page for controlled comparison; do not handle challenges."""
+    index = int(query["query_index"])
+    evidence_dir = run_dir / "search_evidence" / "google"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    search_url = "https://www.google.com/search?" + urlencode({"q": query["query"], "num": "10"})
+    row = {"query_index": index, "exact_query": query["query"], "requested_url": search_url,
+           "captured_at": now_iso(), "terminal_status": "in_progress",
+           "organic_results_reported": None, "organic_results_returned_count": 0,
+           "organic_results_inspected_count": 0, "organic_results": []}
+    try:
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(1500)
+        row["actual_url"] = page.url
+        row["page_title"] = await page.title()
+        body = await page.locator("body").inner_text(timeout=10000)
+        lower_body = body.lower()
+        blocked = ("/sorry/" in page.url.lower() or any(term in lower_body for term in (
+            "unusual traffic", "not a robot", "verify you are human", "automated queries")))
+        row["challenge_status"] = "blocked" if blocked else "clear"
+        count = re.search(r"(?:About\s+)?([\d,]+)\s+results", body, re.IGNORECASE)
+        if count:
+            row["organic_results_reported"] = int(count.group(1).replace(",", ""))
+        if blocked:
+            row["terminal_status"] = "blocked"
+        else:
+            raw_results = await page.evaluate("""() => {
+              const root = document.querySelector('#rso') || document.querySelector('#search') || document.body;
+              const primary = [...root.querySelectorAll('.tF2Cxc')];
+              const cards = primary.length ? primary : [...root.querySelectorAll('.MjjYud')];
+              return cards.map(box => {
+                const link = box.querySelector('a:has(h3)');
+                const heading = box.querySelector('h3');
+                if (!link || !heading) return null;
+                return {url: link.href, title: (heading.innerText || '').trim(),
+                        context: (box.innerText || '').trim()};
+              }).filter(item => item && /^https?:/.test(item.url));
+            }""")
+            seen: set[str] = set()
+            for item in raw_results:
+                url = str(item.get("url") or "")
+                host = host_of(url)
+                if not host or host == "google.com" or host.endswith(".google.com") or url in seen:
+                    continue
+                seen.add(url)
+                row["organic_results"].append({
+                    "position": len(row["organic_results"]) + 1,
+                    "title": str(item.get("title") or "")[:250], "url": url,
+                    "domain": host, "context": str(item.get("context") or "")[:1200],
+                })
+                if len(row["organic_results"]) >= 10:
+                    break
+            row["organic_results_returned_count"] = len(row["organic_results"])
+            row["organic_results_inspected_count"] = 0
+            row["results_extracted_from_page_count"] = len(row["organic_results"])
+            for result in row["organic_results"]:
+                result["host_screen_disposition"], result["host_screen_reason"] = classify_result(result)
+            row["terminal_status"] = "success" if row["organic_results"] else "no_results"
+        row["screenshot"] = await screenshot_with_fallback(
+            page, evidence_dir / f"query_{index:04d}_serp.png", 20000, logger, "google_serp"
+        )
+    except Exception as exc:
+        row.update({"terminal_status": "error", "error": f"{type(exc).__name__}: {exc}"[:1000],
+                    "actual_url": page.url})
+    logger.emit("google_evidence_captured", query_index=index, status=row["terminal_status"],
+                result_count=row["organic_results_returned_count"], challenge=row.get("challenge_status"))
+    return row
+
+
 def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
                           result_limit: int) -> tuple[list[dict], dict]:
     """Run the ChatGPT browser runner under the workflow's Xvfb display."""
@@ -668,19 +771,24 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
 
     run_dir = args.state_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    queries = build_queries(args.categories, args.locations, args.region)
-    if len(queries) > 200:
-        raise ValueError("Maximum configured batch is 200 category/location queries")
+    categories, locations = resolved_inputs(args)
+    queries = build_queries("\n".join(categories), "\n".join(locations), args.region)
     if not 1 <= args.max_queries <= 20:
         raise ValueError("max-queries must be between 1 and 20")
-    if not 1 <= args.max_sites_per_query <= 8:
-        raise ValueError("max-sites-per-query must be between 1 and 8")
+    if not 1 <= args.max_sites_per_query <= 10:
+        raise ValueError("max-sites-per-query must be between 1 and 10")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", run_dir.name):
         raise ValueError("state-dir folder name must be a safe run key (letters, digits, dot, underscore, hyphen)")
     manifest_path = run_dir / "RUN_MANIFEST.json"
+    input_sources = ({"categories": csv_input_metadata(args.categories_csv, "category"),
+                      "cities": csv_input_metadata(args.cities_csv, "city")}
+                     if args.categories_csv and args.cities_csv else {})
     manifest = {"run_key": run_dir.name, "region": args.region, "engine": "chatgpt_web_ui",
-                "categories": split_values(args.categories), "locations": split_values(args.locations),
+                "categories": categories, "locations": locations,
                 "configured_queries": len(queries), "input_fingerprint": fingerprint(queries, args.region, "chatgpt_web_ui"),
+                "input_sources": input_sources,
+                "google_evidence_enabled": bool(args.capture_google_evidence),
+                "commit_screenshots_enabled": args.commit_screenshots,
                 "workflow": "GitHub Actions Playwright headed Chromium under Xvfb; ChatGPT response runner",
                 "created_at": now_iso(), "updated_at": now_iso(), "automated_scoring_is_final": False,
                 "review_policy": "ChatGPT discovery evidence, direct-site signals, Hermes visual review, and human decisions remain separate"}
@@ -688,10 +796,14 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
         prior = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         if prior.get("input_fingerprint") != manifest["input_fingerprint"]:
             raise ValueError("This run key already contains different categories/locations/region; choose a new run key")
-        manifest = {**prior, "updated_at": now_iso()}
+        manifest = {**prior, "updated_at": now_iso(),
+                    "google_evidence_enabled": bool(args.capture_google_evidence),
+                    "commit_screenshots_enabled": args.commit_screenshots}
     logger = BehaviorLogger(run_dir / "BEHAVIOR_LOG.jsonl")
     records = {int(row["query_index"]): row for row in read_jsonl(run_dir / "QUERY_LEDGER.jsonl")
                if row.get("query_index") is not None}
+    google_records = {int(row["query_index"]): row for row in read_jsonl(run_dir / "GOOGLE_SEARCH_LEDGER.jsonl")
+                      if row.get("query_index") is not None}
     candidates = read_jsonl(run_dir / "CANDIDATE_LEDGER.jsonl")
     candidate_by_domain = {row.get("domain", "").lower(): row for row in candidates if row.get("domain")}
     exclusions = set()
@@ -700,7 +812,9 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
         exclusions = {line.strip().lower().removeprefix("www.") for line in exclusion_path.read_text(encoding="utf-8").splitlines()
                       if line.strip() and not line.strip().startswith("#")}
     public_host_cache: dict[str, bool] = {}
-    pending = [query for query in queries if not query_is_complete(records.get(query["query_index"], {}))]
+    pending = [query for query in queries
+               if not query_is_complete(records.get(query["query_index"], {})) or
+               (args.capture_google_evidence and query["query_index"] not in google_records)]
     batch = pending[:args.max_queries]
     logger.emit("batch_configuration", configured_query_count=len(queries), pending_query_count=len(pending),
                 selected_query_count=len(batch), max_queries=args.max_queries,
@@ -738,6 +852,12 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
                         site_navigation="direct URL after ChatGPT extraction", result_link_clicks=0)
             for query in batch:
                 idx = query["query_index"]
+                if args.capture_google_evidence and idx not in google_records:
+                    google_records[idx] = await capture_google_search_evidence(page, query, run_dir, logger)
+                    atomic_jsonl(run_dir / "GOOGLE_SEARCH_LEDGER.jsonl",
+                                 [google_records[key] for key in sorted(google_records)])
+                if query_is_complete(records.get(idx, {})):
+                    continue
                 row = {"query_index": idx, **query, "search_engine": "chatgpt_web_ui",
                        "terminal_status": "in_progress", "organic_results_returned_count": 0,
                        "organic_results_inspected_count": 0, "organic_results": [],
@@ -853,24 +973,26 @@ async def run_duckduckgo_batch(args: argparse.Namespace) -> int:
 
     run_dir = args.state_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    categories, locations = split_values(args.categories), split_values(args.locations)
+    categories, locations = resolved_inputs(args)
     queries = [{"query_index": i, "category_index": ci, "category": category,
                 "location_index": li, "location": location, "query": f"{category} {location}"}
                for i, (ci, category, li, location) in enumerate(
                    ((ci, c, li, loc) for ci, c in enumerate(categories, 1)
                     for li, loc in enumerate(locations, 1)), 1)]
-    if len(queries) > 200:
-        raise ValueError("Maximum configured batch is 200 category/location queries")
     if args.max_queries < 1 or args.max_queries > 20:
         raise ValueError("max-queries must be between 1 and 20")
-    if args.max_sites_per_query < 1 or args.max_sites_per_query > 8:
-        raise ValueError("max-sites-per-query must be between 1 and 8")
+    if args.max_sites_per_query < 1 or args.max_sites_per_query > 10:
+        raise ValueError("max-sites-per-query must be between 1 and 10")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", run_dir.name):
         raise ValueError("state-dir folder name must be a safe run key (letters, digits, dot, underscore, hyphen)")
     input_hash = fingerprint(queries, args.region, "duckduckgo_html")
     manifest_path = run_dir / "RUN_MANIFEST.json"
+    input_sources = ({"categories": csv_input_metadata(args.categories_csv, "category"),
+                      "cities": csv_input_metadata(args.cities_csv, "city")}
+                     if args.categories_csv and args.cities_csv else {})
     manifest = {"run_key": run_dir.name, "region": args.region, "engine": "duckduckgo_html",
                 "search_url": DDG_SEARCH_URL, "categories": categories, "locations": locations,
+                "input_sources": input_sources,
                 "configured_queries": len(queries), "input_fingerprint": input_hash,
                 "workflow": "GitHub Actions headed Chromium under Xvfb",
                 "created_at": now_iso(), "updated_at": now_iso(),
@@ -1081,12 +1203,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", choices=("chatgpt", "duckduckgo"), default="chatgpt",
                         help="Discovery source (ChatGPT browser is the default)")
-    parser.add_argument("--categories", required=True, help="One category per line")
-    parser.add_argument("--locations", required=True, help="One named location per line")
+    parser.add_argument("--categories", help="One category per line (legacy inline input)")
+    parser.add_argument("--locations", help="One named location per line (legacy inline input)")
+    parser.add_argument("--categories-csv", type=Path, help="CSV with a 'category' column")
+    parser.add_argument("--cities-csv", type=Path, help="CSV with a 'city' column")
+    parser.add_argument("--capture-google-evidence", action="store_true",
+                        help="Capture the first Google results page for this batch; challenges are recorded, never solved")
+    parser.add_argument("--commit-screenshots", type=lambda value: value.lower() == "true", default=False,
+                        help="Screenshot persistence preference recorded in the manifest")
     parser.add_argument("--region", required=True)
     parser.add_argument("--state-dir", required=True, type=Path, help="Persistent run directory inside the repository")
     parser.add_argument("--max-queries", type=int, default=3, help="Maximum pending queries this invocation processes (1-20)")
-    parser.add_argument("--max-sites-per-query", type=int, default=3, help="Maximum direct websites checked per query (1-8)")
+    parser.add_argument("--max-sites-per-query", type=int, default=3, help="Maximum direct websites checked per query (1-10)")
     return parser.parse_args()
 
 

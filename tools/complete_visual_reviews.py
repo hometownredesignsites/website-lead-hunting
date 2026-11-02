@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run local Hermes vision reviews on desktop screenshots committed by GitHub Actions."""
+"""Run local Hermes vision reviews on temporary desktop screenshots from a lead-hunt artifact."""
 from __future__ import annotations
 
 import argparse

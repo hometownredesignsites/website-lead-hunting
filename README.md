@@ -1,62 +1,62 @@
 # ChatGPT Website Lead Hunting
 
-This repository runs local-business discovery and website review in GitHub Actions. The discovery step asks ChatGPT through a headed Playwright/Xvfb runner; the site-review step checks candidate websites directly and captures desktop and mobile screenshots.
+This repository runs local-business discovery and direct website assessment in GitHub Actions. The discovery step asks ChatGPT through a headed Playwright/Xvfb runner; the site-review step visits eligible candidate sites and captures temporary desktop and mobile screenshots.
 
-## Start or continue a run
+## Inputs and batch size
 
-1. Open **Actions → ChatGPT website lead hunt → Run workflow** and choose the `git-chatgpt` branch in **Use workflow from**.
-2. Set a stable `run_key`, categories and named locations (one per line), and the batch/site limits.
-3. Use the same key and inputs to resume. A changed category/location/region set requires a new key.
-4. The workflow processes up to 20 pending category/location prompts in a run, and checks up to 8 direct business websites per prompt. The default batch is smaller to keep runs manageable.
-5. The Action commits run data to the selected branch and also uploads a seven-day artifact. The **Commit screenshots** boolean defaults to `true`; turn it off to leave screenshot image files out of the branch commit while keeping them in the artifact.
+The workflow reads two committed CSVs under `config/`:
 
-The default inputs target kitchen remodelers in Westminster, Colorado.
+- `config/business_categories.csv` — one `category` column.
+- `config/cities.csv` — one `city` column; values containing commas should be quoted.
+
+The included rows are starter examples. Replace them with the complete approved category and city lists before a market run. The planning step prints the Cartesian product and the current batch size before research begins.
+
+Open **Actions → ChatGPT website lead hunt → Run workflow** on the `git-chatgpt` branch. Use a stable `run_key` to resume the same inputs. A changed category/city set requires a new key. Each manual dispatch processes up to 20 pending category/city prompts and assesses up to 10 sites per prompt. Runs are serial and bounded; the current workflow has no schedule or automatic fan-out. It uses a six-hour job timeout, so large lists must be run in measured batches. A 3,200-query input requires at least 160 dispatches at 20 queries each. Benchmark smaller batches before increasing volume.
+
+`Capture Google evidence` is an optional comparison pass that stores raw Google result snippets and reported counts beside ChatGPT's results. It is off by default. Google evidence extraction does not visit or independently assess every Google result.
 
 ## GitHub Actions runtime
 
-The workflows use Node.js 24-compatible action releases: `actions/checkout@v5` or later, `actions/setup-python@v6` or later, and `actions/upload-artifact@v6` or later. Keep these actions on Node 24-based releases to avoid the Node.js 20 deprecation warning.
+The workflows use Node.js 24-compatible action releases: `actions/checkout@v5`, `actions/setup-python@v6`, and `actions/upload-artifact@v6`. The production ChatGPT runner uses headed Chromium under Xvfb through `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules. The runner owns response wait, settle, and retry behavior. The lead-hunt code consumes its validated response. The workflow records failures and diagnostics and does not attempt CAPTCHA handling.
 
-## ChatGPT browser runner
+The prompt requests independent local businesses with direct official website URLs, supporting source URLs, and service-area evidence. The workflow filters known directories and aggregators, checks candidate URLs and redirects against public-address rules, visits eligible sites directly, and leaves Hermes visual and human review pending.
 
-The production workflow runs the ChatGPT UI with headed Chromium under Xvfb using `xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24'`. It uses `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules. The response wait, settle, and retry behavior stays in that runner; the lead-hunt code calls it as a child process and consumes its validated JSON response. The ChatGPT message selector also supports the anonymous shell's current `data-message-role="assistant"` markup and ignores empty trailing assistant rows.
-
-Each query has two outer attempts, and the runner itself can retry a failed send after refreshing the chat. Successful response text, parsed JSON, runner metadata, and a full-page ChatGPT screenshot are saved in `runs/<run_key>/chatgpt/query_NNNN/`. Failure screenshots and HTML diagnostics are retained there too. The temporary browser profile is deleted after each attempt and is never committed.
-
-The prompt requests independent local businesses with direct official website URLs, supporting source URLs, and service-area evidence. Invalid JSON or an empty response leaves the query pending for a later resume. The workflow records failures and screenshots rather than attempting CAPTCHA handling.
-
-## Run outputs
+## Run outputs and audit
 
 Each `runs/<run_key>/` folder contains:
 
-- `RUN_MANIFEST.json` — the input fingerprint, engine, and review policy.
-- `QUERY_LEDGER.jsonl` — per-query prompt, response paths, sources, status, results, and dispositions.
-- `CANDIDATE_LEDGER.jsonl` — unique candidate websites, direct-site evidence, screenshots, and pending review fields.
-- `LOCATION_CATEGORY_PROGRESS.json` — batch progress and terminal status.
-- `BEHAVIOR_LOG.jsonl` — chronological query, browser, retry, and site-review events.
-- `chatgpt/` — prompts, instructions, raw responses, parsed JSON, runner metadata, screenshots, and error diagnostics.
-- `screenshots/` — desktop and mobile screenshots of candidate websites.
+- `RUN_MANIFEST.json` — input fingerprint, source CSV hashes, engine, and review policy.
+- `QUERY_LEDGER.jsonl` — prompt, response paths, sources, status, returned candidates, and dispositions.
+- `CANDIDATE_LEDGER.jsonl` — deduplicated candidate sites, direct-site evidence, screenshot paths, and review fields.
+- `LOCATION_CATEGORY_PROGRESS.json` and `BEHAVIOR_LOG.jsonl` — progress and chronological events.
+- `GOOGLE_SEARCH_LEDGER.jsonl` and `search_evidence/google/` — optional raw Google comparison evidence.
+- `RUN_SUMMARY.json` and `RUN_SUMMARY.md` — validator report with expected/processed queries, returned/reviewed candidates, dispositions, site visits, and review status.
+- `chatgpt/` and `screenshots/` — response diagnostics and temporary images used for visual inference.
 
-ChatGPT discovery is not treated as proof of official-site ownership or service-area fit. The workflow filters known directories and aggregators, checks the candidate URL and redirects against public-address rules, visits eligible official sites directly, and keeps both Hermes visual review and human review pending.
+`tools/validate_run.py` reconciles query indices and CSV inputs, candidate dispositions, review counts, and screenshot references. The workflow writes a summary even when the research step fails, so partial progress stays inspectable.
 
-## Visual and human review
+## Temporary image scoring and cleanup
 
-The GitHub Action saves full-page desktop and mobile screenshots for each assessed business. Hermes visual scoring is a separate local step; it is not run by the GitHub Action. With the Hermes CLI configured for the NVIDIA provider, run:
+Image files are temporary inference inputs. The workflow uploads the complete run folder as a GitHub Actions artifact for seven days. The **Commit screenshots** switch now defaults to `false`, so branch commits retain ledgers and reports without adding new image files. Turn it on only when a run needs image files in the branch. Artifacts are still uploaded either way and expire after seven days.
+
+The GitHub Action does not run visual inference. To score an artifact, download and extract it into `runs/<run_key>/`, configure the local Hermes CLI/provider, and run:
 
 ```bash
 python tools/complete_visual_reviews.py --run-dir runs/<run-key>
+python tools/validate_run.py --run-dir runs/<run-key> --write-summary
+python tools/purge_screenshots.py --run-key <run-key>
+python tools/purge_screenshots.py --run-key <run-key> --apply
 ```
 
-This updates `CANDIDATE_LEDGER.jsonl` and writes `HERMES_VISUAL_REVIEW_LEDGER.jsonl` using the desktop screenshot only. Hermes scoring is advisory and does not complete the human decision. Review ChatGPT's source URLs and service-area claims, inspect the direct website and screenshots, then record the human decision separately in the candidate ledger.
+The first purge command is a dry run. `--apply` deletes all image files in that run after every candidate with a saved website screenshot has an assessed Hermes review. It preserves ledgers and text evidence, records the purge in the manifest, and removes the image files from the current branch tip once the cleanup commit is pushed. Hermes visual scoring uses desktop candidate screenshots; it is advisory and does not complete the human decision. Keep the original artifact until scoring and review are complete. It expires after seven days.
+
+Images committed by earlier workflow runs remain in older Git commits. Removing them from the repository's full history requires a history rewrite and force push; the current change prevents future image commits by default but does not rewrite existing history.
 
 ## ChatGPT runner check
 
-**Actions → ChatGPT Xvfb runner check** sends a one-off prompt through the same runner used by lead hunting. It uploads the answer, metadata, success screenshot, and failure diagnostics as a seven-day artifact; it does not commit those probe files to a run folder.
+**Actions → ChatGPT Xvfb runner check** sends a one-off prompt through the same runner. It uploads the answer, metadata, success screenshot, and failure diagnostics as a seven-day artifact; it does not commit probe files to a run folder.
 
-The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. The successful run committed the response, metadata, and desktop/mobile screenshots under `runs/westminster-kitchen-selector-test-20261101/`.
-
-## Screenshot retention
-
-Screenshots are committed with the ledgers so the evidence stays with the run. Git history will grow as runs accumulate. Keep these outputs free of secrets and personal session data; the ChatGPT browser profile is temporary and excluded from the saved run.
+The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. That run committed response data and desktop/mobile screenshots under `runs/westminster-kitchen-selector-test-20261101/`.
 
 ## Local checks
 
@@ -65,4 +65,4 @@ python -m unittest discover -s tests -v
 python -m py_compile tools/lead_hunt.py tools/chatgpt_file_playwright_anonymous_ci.py tools/playwright_runner/browser_session.py
 ```
 
-Visual-review helper outputs are written locally; commit and push the run folder if you want them persisted to GitHub.
+Visual-review outputs are written locally. Commit and push review ledgers and reports after purging temporary images if you want scored results persisted in GitHub.
