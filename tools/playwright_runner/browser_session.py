@@ -81,6 +81,10 @@ def find_chat_composer(page, timeout_ms: int):
     ]
     deadline = time.time() + max(1.0, timeout_ms / 1000.0)
     while time.time() < deadline:
+        if is_cloudflare_challenge(page):
+            raise RuntimeError(
+                "ChatGPT returned a Cloudflare challenge page; no prompt was submitted."
+            )
         dismiss_blocking_modals(page)
         composer = first_visible_locator(page, selectors, timeout_ms=min(2500, max(1000, timeout_ms)))
         if composer is not None:
@@ -91,6 +95,26 @@ def find_chat_composer(page, timeout_ms: int):
                 return composer
         page.wait_for_timeout(350)
     return None
+
+
+def is_cloudflare_challenge(page) -> bool:
+    """Detect an access challenge without interacting with or solving it."""
+    try:
+        if "just a moment" in page.title().lower():
+            return True
+    except Exception:
+        pass
+    for selector in (
+        "script[src*='/cdn-cgi/challenge-platform/']",
+        "form#challenge-form",
+        "#challenge-running",
+    ):
+        try:
+            if page.locator(selector).count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def assistant_turns(page):
