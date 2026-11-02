@@ -15,6 +15,16 @@ on:
         description: "Candidate IDs separated by commas or newlines (up to 20)"
         required: true
         type: string
+      automatic_retry_round:
+        description: "Managed by the retry scheduler; leave at 0 for a manual review"
+        required: false
+        default: "0"
+        type: string
+      retry_request_id:
+        description: "Managed by the retry scheduler; leave blank for a manual review"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -33,6 +43,8 @@ jobs:
       candidate_ids: ${{ steps.matrix.outputs.candidate_ids }}
       run_key: ${{ steps.validate.outputs.run_key }}
       source_run_id: ${{ steps.validate.outputs.source_run_id }}
+      retry_round: ${{ steps.validate.outputs.retry_round }}
+      retry_request_id: ${{ steps.validate.outputs.retry_request_id }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -43,6 +55,8 @@ jobs:
         env:
           REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
           REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+          AUTOMATIC_RETRY_ROUND: ${{ inputs.automatic_retry_round }}
+          RETRY_REQUEST_ID: ${{ inputs.retry_request_id }}
         run: |
           if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "review_run_key contains invalid characters" >&2
@@ -52,16 +66,39 @@ jobs:
             echo "review_source_run_id must be a numeric GitHub Actions run ID" >&2
             exit 1
           fi
+          if ! [[ "$AUTOMATIC_RETRY_ROUND" =~ ^[0-2]$ ]]; then
+            echo "automatic_retry_round must be between 0 and 2" >&2
+            exit 1
+          fi
+          if [[ -n "$RETRY_REQUEST_ID" ]] && ! [[ "$RETRY_REQUEST_ID" =~ ^[A-Fa-f0-9,]{1,512}$ ]]; then
+            echo "retry_request_id contains invalid characters" >&2
+            exit 1
+          fi
+          if [[ "$AUTOMATIC_RETRY_ROUND" == "0" && -n "$RETRY_REQUEST_ID" ]] || \
+             [[ "$AUTOMATIC_RETRY_ROUND" != "0" && -z "$RETRY_REQUEST_ID" ]]; then
+            echo "automatic retry round and request ID must be provided together" >&2
+            exit 1
+          fi
           echo "run_key=$REVIEW_RUN_KEY" >> "$GITHUB_OUTPUT"
           echo "source_run_id=$REVIEW_SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "retry_round=$AUTOMATIC_RETRY_ROUND" >> "$GITHUB_OUTPUT"
+          echo "retry_request_id=$RETRY_REQUEST_ID" >> "$GITHUB_OUTPUT"
 
       - name: Build bounded candidate matrix
         id: matrix
         env:
           REVIEW_CANDIDATE_IDS: ${{ inputs.review_candidate_ids }}
+          REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
+          RETRY_ROUND: ${{ inputs.automatic_retry_round }}
+          RETRY_REQUEST_ID: ${{ inputs.retry_request_id }}
+          SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
         run: |
           python tools/build_visual_review_matrix.py \
             --candidate-ids "$REVIEW_CANDIDATE_IDS" \
+            --run-dir "runs/$REVIEW_RUN_KEY" \
+            --retry-round "$RETRY_ROUND" \
+            --retry-request-id "$RETRY_REQUEST_ID" \
+            --source-run-id "$SOURCE_RUN_ID" \
             --github-output "$GITHUB_OUTPUT"
 
   review_site:
@@ -326,6 +363,8 @@ jobs:
           CANDIDATE_IDS: ${{ needs.plan.outputs.candidate_ids }}
           SOURCE_RUN_ID: ${{ needs.plan.outputs.source_run_id }}
           REVIEW_RUN_ID: ${{ github.run_id }}
+          AUTOMATIC_RETRY_ROUND: ${{ needs.plan.outputs.retry_round }}
+          RETRY_REQUEST_ID: ${{ needs.plan.outputs.retry_request_id }}
         run: |
           python tools/merge_chatgpt_visual_reviews.py \
             --ledger "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" \
@@ -333,6 +372,8 @@ jobs:
             --candidate-ids "$CANDIDATE_IDS" \
             --source-run-id "$SOURCE_RUN_ID" \
             --review-run-id "$REVIEW_RUN_ID" \
+            --automatic-retry-round "$AUTOMATIC_RETRY_ROUND" \
+            --retry-request-id "$RETRY_REQUEST_ID" \
             --output "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json"
 
       - name: Refresh validated run summary
@@ -362,7 +403,8 @@ jobs:
             "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json" \
             "runs/$RUN_KEY/RUN_SUMMARY.json" \
             "runs/$RUN_KEY/RUN_SUMMARY.md" \
-            "runs/$RUN_KEY/HIGH_MEDIUM_CANDIDATES.csv"
+            "runs/$RUN_KEY/HIGH_MEDIUM_CANDIDATES.csv" \
+            "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
           if ! git diff --cached --quiet; then
             git commit -m "Save ChatGPT visual reviews: $RUN_KEY"
             git push origin "HEAD:${GITHUB_REF_NAME}"

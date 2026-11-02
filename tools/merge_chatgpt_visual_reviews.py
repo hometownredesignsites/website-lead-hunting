@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -64,7 +65,9 @@ def artifact_records(results_dir: Path, expected_ids: list[str]) -> dict[str, di
 
 
 def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
-          source_run_id: str, review_run_id: str) -> dict:
+          source_run_id: str, review_run_id: str,
+          automatic_retry_round: int = 0, retry_request_id: str = "",
+          retry_delay_minutes: int = 30, max_automatic_retry_rounds: int = 2) -> dict:
     rows = read_jsonl(ledger_path)
     by_id: dict[str, dict] = {}
     for row in rows:
@@ -111,6 +114,8 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
             "reviewed_at": envelope.get("completed_at") or now,
             "source_lead_hunt_run_id": str(source_run_id),
             "review_workflow_run_id": str(review_run_id),
+            "automatic_retry_round": automatic_retry_round,
+            "retry_request_id": retry_request_id or None,
             "failure_class": envelope.get("failure_class"),
             "error": envelope.get("error") or (result.get("errors") if valid_result else None),
         }
@@ -126,6 +131,63 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows),
         encoding="utf-8",
     )
+    queue_path = ledger_path.parent / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
+    if queue_path.is_file():
+        try:
+            retry_queue = json.loads(queue_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Retry queue could not be read: {exc}") from exc
+    else:
+        retry_queue = {"schema_version": 1, "run_key": ledger_path.parent.name, "entries": []}
+    if not isinstance(retry_queue, dict) or not isinstance(retry_queue.get("entries"), list):
+        raise ValueError("Retry queue must be a JSON object with an entries array")
+    entries = {entry.get("candidate_id"): entry for entry in retry_queue["entries"]
+               if isinstance(entry, dict) and entry.get("candidate_id")}
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat(timespec="seconds")
+    for candidate_id in candidate_ids:
+        row = by_id[candidate_id]
+        last_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
+        status = last_attempt.get("status")
+        entry = entries.get(candidate_id, {"candidate_id": candidate_id})
+        entry.update({
+            "run_key": ledger_path.parent.name,
+            "source_lead_hunt_run_id": str(source_run_id),
+            "last_review_workflow_run_id": str(review_run_id),
+            "last_status": status,
+            "updated_at": now,
+        })
+        if status == "passed":
+            entry.update({"status": "resolved", "not_before": None,
+                          "resolved_at": now, "last_dispatch_error": None})
+        elif status == "failed":
+            entry.update({"status": "failed", "not_before": None,
+                          "last_dispatch_error": None})
+        elif status == "retry-needed":
+            if automatic_retry_round < max_automatic_retry_rounds:
+                retry_round = automatic_retry_round + 1
+                request_key = f"{source_run_id}:{review_run_id}:{candidate_id}:{retry_round}"
+                request_id = hashlib.sha256(request_key.encode("utf-8")).hexdigest()[:24]
+                # Repeated merge execution for the same completed workflow must
+                # preserve the original due time and request ID.
+                same_request = entry.get("retry_request_id") == request_id
+                entry.update({
+                    "status": entry.get("status") if same_request and entry.get("status") in {"pending", "dispatched"} else "pending",
+                    "automatic_retry_round": retry_round,
+                    "retry_request_id": request_id,
+                    "not_before": entry.get("not_before") if same_request else
+                        (now_dt + timedelta(minutes=retry_delay_minutes)).isoformat(timespec="seconds"),
+                    "last_dispatch_error": None if not same_request else entry.get("last_dispatch_error"),
+                })
+            else:
+                entry.update({"status": "exhausted", "not_before": None,
+                              "automatic_retry_round": automatic_retry_round})
+        entries[candidate_id] = entry
+    retry_queue.update({"schema_version": 1, "run_key": ledger_path.parent.name,
+                        "updated_at": now, "retry_delay_minutes": retry_delay_minutes,
+                        "max_automatic_retry_rounds": max_automatic_retry_rounds,
+                        "entries": sorted(entries.values(), key=lambda item: item["candidate_id"])})
+    queue_path.write_text(json.dumps(retry_queue, indent=2) + "\n", encoding="utf-8")
     # Re-read the durable records after writing. The summary must reflect the
     # candidate ledger that downstream users see, even if envelope metadata
     # was incomplete or conflicted with an existing accepted scorecard.
@@ -154,13 +216,25 @@ def main() -> int:
     parser.add_argument("--candidate-ids", required=True, help="JSON array of requested IDs")
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--review-run-id", required=True)
+    parser.add_argument("--automatic-retry-round", type=int, default=0)
+    parser.add_argument("--retry-request-id", default="")
+    parser.add_argument("--retry-delay-minutes", type=int, default=30)
+    parser.add_argument("--max-automatic-retry-rounds", type=int, default=2)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     candidate_ids = json.loads(args.candidate_ids)
     if not isinstance(candidate_ids, list) or not all(isinstance(value, str) for value in candidate_ids):
         raise ValueError("--candidate-ids must be a JSON array of strings")
+    if not 0 <= args.automatic_retry_round <= args.max_automatic_retry_rounds:
+        raise ValueError("automatic retry round is outside the configured retry limit")
+    if args.retry_delay_minutes < 1 or args.max_automatic_retry_rounds < 0:
+        raise ValueError("retry delay must be positive and retry limit cannot be negative")
     summary = merge(args.ledger, args.results_dir, candidate_ids,
-                    args.source_run_id, args.review_run_id)
+                    args.source_run_id, args.review_run_id,
+                    args.automatic_retry_round, args.retry_request_id,
+                    args.retry_delay_minutes, args.max_automatic_retry_rounds)
+    summary["automatic_retry_round"] = args.automatic_retry_round
+    summary["retry_queue_file"] = str(args.ledger.parent / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2))
