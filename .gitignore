@@ -5,3 +5,8 @@ venv/
 artifacts/
 tmp/
 .playwright-chatgpt-profile/
+runs/**/*.png
+runs/**/*.jpg
+runs/**/*.jpeg
+runs/**/*.webp
+runs/**/*.gif

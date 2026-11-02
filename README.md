@@ -31,7 +31,8 @@ Each `runs/<run_key>/` folder contains:
 - `LOCATION_CATEGORY_PROGRESS.json` and `BEHAVIOR_LOG.jsonl` — progress and chronological events.
 - `GOOGLE_SEARCH_LEDGER.jsonl` and `search_evidence/google/` — optional raw Google comparison evidence.
 - `RUN_SUMMARY.json` and `RUN_SUMMARY.md` — validator report with expected/processed queries, returned/reviewed candidates, dispositions, site visits, and review status.
-- `chatgpt/` and `screenshots/` — response diagnostics and temporary images used for visual inference.
+- `HIGH_MEDIUM_CANDIDATES.csv` — import-ready shortlist of candidates with either an automated or ChatGPT visual high/medium opportunity signal. The export includes scores, current review/attempt statuses, and concise evidence notes.
+- `chatgpt/` — text response records and diagnostics. Screenshots are attached to the seven-day Actions artifact for inference and are not committed to the repository.
 
 `tools/validate_run.py` reconciles query indices and CSV inputs, candidate dispositions, review counts, and screenshot references. The workflow writes a summary even when the research step fails, so partial progress stays inspectable.
 
@@ -58,7 +59,7 @@ The fixture-driven recovery checks cover missing source screenshots, screenshot 
 
 ## Temporary image scoring and cleanup
 
-Image files are temporary inference inputs. The workflow uploads the complete run folder as a GitHub Actions artifact for seven days. The **Commit screenshots** switch now defaults to `false`, so branch commits retain ledgers and reports without adding new image files. Turn it on only when a run needs image files in the branch. Artifacts are still uploaded either way and expire after seven days.
+Images are temporary inference inputs. The workflow uploads them with the complete run folder as a GitHub Actions artifact for seven days. They are excluded from Git commits by policy and `.gitignore`; the visual-review workflow reads screenshots only from the source Actions artifact and does not fall back to repository files. The generated high/medium CSV and candidate ledger remain durable in the branch after the artifact expires.
 
 The main lead-hunt workflow does not automatically run visual inference. For the existing Hermes path, download and extract an artifact into `runs/<run_key>/`, configure the local Hermes CLI/provider, and run:
 
@@ -69,15 +70,15 @@ python tools/purge_screenshots.py --run-key <run-key>
 python tools/purge_screenshots.py --run-key <run-key> --apply
 ```
 
-The first purge command is a dry run. `--apply` deletes all image files in that run after every candidate with a saved website screenshot has an assessed Hermes review. It preserves ledgers and text evidence, records the purge in the manifest, and removes the image files from the current branch tip once the cleanup commit is pushed. Hermes visual scoring uses desktop candidate screenshots; it is advisory and does not complete the human decision. Keep the original artifact until scoring and review are complete. It expires after seven days.
+The first purge command is a dry run. `--apply` deletes local image files after every candidate with a saved website screenshot has an assessed Hermes review. It preserves ledgers and text evidence and records the purge in the manifest. This optional local cleanup is for extracted or downloaded run folders; GitHub Actions artifacts expire after seven days. Hermes visual scoring uses desktop candidate screenshots; it is advisory and does not complete the human decision.
 
-Images committed by earlier workflow runs remain in older Git commits. Removing them from the repository's full history requires a history rewrite and force push; the current change prevents future image commits by default but does not rewrite existing history.
+Older screenshots were removed from both branch tips and Git history as part of the cleanup. This history rewrite changes commit IDs; collaborators with existing clones should fetch the rewritten branches and re-clone or reset local branches before pushing.
 
 ## ChatGPT runner check
 
 **Actions → ChatGPT Xvfb runner check** sends one-off prompts through the same Xvfb runner. It uploads the answer, metadata, success screenshot, and diagnostics as a seven-day artifact; it does not commit probe files to a run folder. **Attach test image** checks basic image upload and recognition with a synthetic fixture. **Review saved candidate** is a single-candidate capability probe: it requires the numeric source run ID from the lead-hunt Actions URL and downloads that run's `lead-hunt-<run_key>-<run_id>` artifact, which includes the candidate ledger and temporary screenshots. It reads the candidate and screenshots only from that downloaded artifact. If the artifact, ledger, or any source screenshot is unavailable, the workflow fails; it does not fall back to checked-in repository files. It prepares four JPEG viewport crops: desktop top, desktop mid-page, mobile top, and mobile mid-page. Mid-page crops are centered at 35% of the desktop and 60% of the mobile screenshot's scrollable height. All four are attached to guest ChatGPT. This one-off probe can refresh and retry within its existing browser session; the batch workflow instead uses fresh sessions per retry and persists candidate statuses and scorecards.
 
-The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. That run committed response data and desktop/mobile screenshots under `runs/westminster-kitchen-selector-test-20261101/`.
+The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. Its response data remains in the run folder; screenshots are retained only in the short-lived Actions artifact.
 
 ## Local checks
 
@@ -86,4 +87,4 @@ python -m unittest discover -s tests -v
 python -m py_compile tools/lead_hunt.py tools/chatgpt_file_playwright_anonymous_ci.py tools/playwright_runner/browser_session.py
 ```
 
-The batch workflow commits only scorecards, attempt status, and text summaries. The source screenshots and review diagnostics remain in seven-day Actions artifacts and are not added to Git history by this workflow.
+The batch workflow commits scorecards, attempt status, text summaries, and the refreshed high/medium CSV. Source screenshots and review diagnostics remain in seven-day Actions artifacts and are not added to Git history.

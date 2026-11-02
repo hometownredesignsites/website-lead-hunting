@@ -78,7 +78,6 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
 
     results = artifact_records(results_dir, candidate_ids)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    statuses: dict[str, int] = {}
     for candidate_id in candidate_ids:
         row = by_id[candidate_id]
         envelope = results.get(candidate_id) or {
@@ -106,7 +105,6 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
                 status = "failed"
             elif not envelope.get("error"):
                 envelope["error"] = joined_errors or "Review scorecard failed validation."
-        statuses[status] = statuses.get(status, 0) + 1
         attempt = {
             "status": status,
             "candidate_id": candidate_id,
@@ -128,6 +126,16 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows),
         encoding="utf-8",
     )
+    # Re-read the durable records after writing. The summary must reflect the
+    # candidate ledger that downstream users see, even if envelope metadata
+    # was incomplete or conflicted with an existing accepted scorecard.
+    statuses: dict[str, int] = {}
+    for candidate_id in candidate_ids:
+        durable_attempt = by_id[candidate_id].get("chatgpt_visual_review_last_attempt") or {}
+        status = durable_attempt.get("status", "retry-needed")
+        if status not in {"passed", "failed", "retry-needed"}:
+            status = "failed"
+        statuses[status] = statuses.get(status, 0) + 1
     return {
         "candidate_ids": candidate_ids,
         "source_lead_hunt_run_id": str(source_run_id),

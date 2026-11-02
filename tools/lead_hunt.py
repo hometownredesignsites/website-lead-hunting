@@ -822,7 +822,7 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
                 "configured_queries": len(queries), "input_fingerprint": fingerprint(queries, args.region, "chatgpt_web_ui"),
                 "input_sources": input_sources,
                 "google_evidence_enabled": bool(args.capture_google_evidence),
-                "commit_screenshots_enabled": args.commit_screenshots,
+                "commit_screenshots_enabled": False,
                 "workflow": "GitHub Actions Playwright headed Chromium under Xvfb; ChatGPT response runner",
                 "created_at": now_iso(), "updated_at": now_iso(), "automated_scoring_is_final": False,
                 "review_policy": "ChatGPT discovery evidence, direct-site signals, Hermes visual review, and human decisions remain separate"}
@@ -832,7 +832,7 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
             raise ValueError("This run key already contains different categories/locations/region; choose a new run key")
         manifest = {**prior, "updated_at": now_iso(),
                     "google_evidence_enabled": bool(args.capture_google_evidence),
-                    "commit_screenshots_enabled": args.commit_screenshots}
+                    "commit_screenshots_enabled": False}
     logger = BehaviorLogger(run_dir / "BEHAVIOR_LOG.jsonl")
     records = {int(row["query_index"]): row for row in read_jsonl(run_dir / "QUERY_LEDGER.jsonl")
                if row.get("query_index") is not None}
@@ -1243,8 +1243,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cities-csv", type=Path, help="CSV with a 'city' column")
     parser.add_argument("--capture-google-evidence", action="store_true",
                         help="Capture the first Google results page for this batch; challenges are recorded, never solved")
-    parser.add_argument("--commit-screenshots", type=lambda value: value.lower() == "true", default=False,
-                        help="Screenshot persistence preference recorded in the manifest")
     parser.add_argument("--region", required=True)
     parser.add_argument("--state-dir", required=True, type=Path, help="Persistent run directory inside the repository")
     parser.add_argument("--max-queries", type=int, default=3, help="Maximum pending queries this invocation processes (1-20)")

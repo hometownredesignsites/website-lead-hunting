@@ -341,6 +341,15 @@ jobs:
           RUN_KEY: ${{ needs.plan.outputs.run_key }}
         run: python tools/validate_run.py --run-dir "runs/$RUN_KEY" --write-summary
 
+      - name: Refresh high and medium candidate export
+        if: always()
+        env:
+          RUN_KEY: ${{ needs.plan.outputs.run_key }}
+        run: |
+          if [[ -f "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" ]]; then
+            python tools/export_high_medium_candidates.py --run-dir "runs/$RUN_KEY"
+          fi
+
       - name: Commit durable scorecards and run summary
         if: always()
         shell: bash
@@ -352,7 +361,8 @@ jobs:
           git add -- "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" \
             "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json" \
             "runs/$RUN_KEY/RUN_SUMMARY.json" \
-            "runs/$RUN_KEY/RUN_SUMMARY.md"
+            "runs/$RUN_KEY/RUN_SUMMARY.md" \
+            "runs/$RUN_KEY/HIGH_MEDIUM_CANDIDATES.csv"
           if ! git diff --cached --quiet; then
             git commit -m "Save ChatGPT visual reviews: $RUN_KEY"
             git push origin "HEAD:${GITHUB_REF_NAME}"

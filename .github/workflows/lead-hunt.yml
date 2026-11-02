@@ -37,11 +37,6 @@ on:
           - "5"
           - "8"
           - "10"
-      commit_screenshots:
-        description: "Commit screenshot image files to the branch (temporary inference artifact is kept either way)"
-        required: true
-        default: false
-        type: boolean
       capture_google_evidence:
         description: "Capture raw Google result pages for this bounded comparison batch"
         required: true
@@ -100,7 +95,6 @@ jobs:
           MAX_QUERIES: ${{ inputs.max_queries }}
           MAX_SITES_PER_QUERY: ${{ inputs.max_sites_per_query }}
           CAPTURE_GOOGLE_EVIDENCE: ${{ inputs.capture_google_evidence }}
-          COMMIT_SCREENSHOTS: ${{ inputs.commit_screenshots }}
         run: |
           if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "run_key must contain only letters, digits, dot, underscore, and hyphen" >&2
@@ -122,7 +116,6 @@ jobs:
               --state-dir "runs/$RUN_KEY" \
               --max-queries "$MAX_QUERIES" \
               --max-sites-per-query "$MAX_SITES_PER_QUERY" \
-              --commit-screenshots "$COMMIT_SCREENSHOTS" \
               "${capture_args[@]}"
           scan_rc=$?
           echo "exit_code=$scan_rc" >> "$GITHUB_OUTPUT"
@@ -150,12 +143,20 @@ jobs:
           fi
           echo "exit_code=$validation_rc" >> "$GITHUB_OUTPUT"
 
-      - name: Commit findings and optionally screenshots to the selected branch
+      - name: Export high and medium candidates
+        if: always()
+        env:
+          RUN_KEY: ${{ inputs.run_key }}
+        run: |
+          if [[ -f "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" ]]; then
+            python tools/export_high_medium_candidates.py --run-dir "runs/$RUN_KEY"
+          fi
+
+      - name: Commit text findings to the selected branch
         if: always()
         shell: bash
         env:
           RUN_KEY: ${{ inputs.run_key }}
-          COMMIT_SCREENSHOTS: ${{ inputs.commit_screenshots }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || [[ ! -d "runs/$RUN_KEY" ]]; then
@@ -166,15 +167,13 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -- "runs/$RUN_KEY"
-            if [[ "$COMMIT_SCREENSHOTS" != "true" ]]; then
-              while IFS= read -r -d '' staged_path; do
-                case "${staged_path,,}" in
-                  *.png|*.jpg|*.jpeg|*.webp|*.gif)
-                    git reset -q -- "$staged_path"
-                    ;;
-                esac
-              done < <(git diff --cached --name-only -z -- "runs/$RUN_KEY")
-            fi
+            while IFS= read -r -d '' staged_path; do
+              case "${staged_path,,}" in
+                *.png|*.jpg|*.jpeg|*.webp|*.gif)
+                  git reset -q -- "$staged_path"
+                  ;;
+              esac
+            done < <(git diff --cached --name-only -z -- "runs/$RUN_KEY")
             if ! git diff --cached --quiet; then
               git commit -m "Record website lead-hunt batch: $RUN_KEY"
               git push origin "HEAD:${GITHUB_REF_NAME}"
