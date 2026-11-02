@@ -48,14 +48,24 @@ def main() -> int:
             errors.append("verdict does not match its score band")
         if review.get("confidence") not in {"low", "medium", "high"}:
             errors.append("confidence is not an allowed value")
-        for key in ("desktop_observations", "mobile_observations", "major_issues",
-                    "positive_signals", "recommended_redesign_focus", "limitations"):
+        array_fields = (
+            "desktop_top_observations", "desktop_mid_observations",
+            "mobile_top_observations", "mobile_mid_observations",
+            "desktop_observations", "mobile_observations", "major_issues",
+            "positive_signals", "recommended_redesign_focus", "limitations",
+        )
+        for key in array_fields:
             if not isinstance(review.get(key), list) or not all(isinstance(item, str) for item in review.get(key, [])):
                 errors.append(f"{key} must be an array of strings")
-        if not review.get("desktop_observations") or not review.get("mobile_observations"):
-            errors.append("both viewport observations must be non-empty")
+        for key in ("desktop_top_observations", "desktop_mid_observations",
+                    "mobile_top_observations", "mobile_mid_observations",
+                    "desktop_observations", "mobile_observations"):
+            if not review.get(key):
+                errors.append(f"{key} must be non-empty")
     if uploaded_names != expected_names or len(attachment_records) != len(expected_names):
-        errors.append("both expected desktop/mobile screenshots were not confirmed uploaded")
+        errors.append("all expected desktop/mobile top and mid screenshots were not confirmed uploaded")
+    if len(expected_names) != 4:
+        errors.append("candidate context must list exactly four top/mid desktop/mobile screenshots")
 
     result = {
         "status": "passed" if not errors else "failed",
