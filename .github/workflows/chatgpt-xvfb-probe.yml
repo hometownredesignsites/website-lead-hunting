@@ -19,9 +19,14 @@ on:
         default: false
         type: boolean
       review_run_key:
-        description: "Existing runs/<run_key> folder containing the candidate and screenshots"
+        description: "Run key whose candidate and screenshots should be reviewed"
         required: true
         default: "westminster-kitchen-selector-test-20261101"
+        type: string
+      review_source_run_id:
+        description: "Optional lead-hunt Actions run ID; try its retained artifact before using checked-in files"
+        required: false
+        default: ""
         type: string
       review_candidate_id:
         description: "Candidate ID from that run's CANDIDATE_LEDGER.jsonl"
@@ -30,6 +35,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -60,19 +66,53 @@ jobs:
           python tools/create_chatgpt_image_probe.py \
             --output artifacts/chatgpt-xvfb-probe/image-probe.png
 
+      - name: Validate saved-candidate selection
+        if: inputs.review_saved_candidate
+        id: review_selection
+        shell: bash
+        env:
+          REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
+          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+        run: |
+          if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+            echo "review_run_key contains invalid characters" >&2
+            exit 1
+          fi
+          if [[ -n "$REVIEW_SOURCE_RUN_ID" ]] && ! [[ "$REVIEW_SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "review_source_run_id must be a numeric GitHub Actions run ID" >&2
+            exit 1
+          fi
+          echo "run_key=$REVIEW_RUN_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Download lead-hunt artifact for saved-candidate review
+        if: inputs.review_saved_candidate && inputs.review_source_run_id != ''
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: lead-hunt-${{ steps.review_selection.outputs.run_key }}-${{ inputs.review_source_run_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.review_source_run_id }}
+          path: artifacts/lead-hunt-source/runs/${{ steps.review_selection.outputs.run_key }}
+
       - name: Prepare saved candidate screenshots for visual review
         if: inputs.review_saved_candidate
         shell: bash
         env:
           REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
           REVIEW_CANDIDATE_ID: ${{ inputs.review_candidate_id }}
+          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
         run: |
-          if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
-            echo "review_run_key contains invalid characters" >&2
-            exit 1
+          SOURCE_RUN_DIR="runs/$REVIEW_RUN_KEY"
+          ARTIFACT_RUN_DIR="artifacts/lead-hunt-source/runs/$REVIEW_RUN_KEY"
+          if [[ -n "$REVIEW_SOURCE_RUN_ID" && -f "$ARTIFACT_RUN_DIR/CANDIDATE_LEDGER.jsonl" ]]; then
+            SOURCE_RUN_DIR="$ARTIFACT_RUN_DIR"
+            echo "Using lead-hunt artifact from Actions run $REVIEW_SOURCE_RUN_ID."
+          else
+            echo "Using checked-out run folder; no usable lead-hunt artifact was downloaded."
           fi
           python tools/prepare_chatgpt_visual_review.py \
-            --run-dir "runs/$REVIEW_RUN_KEY" \
+            --run-dir "$SOURCE_RUN_DIR" \
+            --fallback-run-dir "runs/$REVIEW_RUN_KEY" \
             --candidate-id "$REVIEW_CANDIDATE_ID" \
             --output-dir artifacts/chatgpt-xvfb-probe/website-review
 

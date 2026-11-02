@@ -25,16 +25,49 @@ def load_candidate(run_dir: Path, candidate_id: str) -> dict:
     raise ValueError(f"Candidate ID not found in {ledger}: {candidate_id}")
 
 
+def resolve_screenshot(record_path: str, run_dir: Path) -> Path | None:
+    """Resolve a screenshot from either a checked-out run or its extracted artifact."""
+    path = Path(record_path)
+    roots_and_candidates: list[tuple[Path, Path]] = []
+    if path.is_absolute():
+        roots_and_candidates.append((run_dir.parent.parent, path))
+        roots_and_candidates.append((run_dir, path))
+    else:
+        root = run_dir.parent.parent
+        roots_and_candidates.append((root, root / path))
+        if len(path.parts) >= 3 and path.parts[0] == "runs" and path.parts[1] == run_dir.name:
+            roots_and_candidates.append((run_dir, run_dir.joinpath(*path.parts[2:])))
+        roots_and_candidates.append((run_dir, run_dir / path))
+    for allowed_root, candidate in roots_and_candidates:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(allowed_root.resolve())
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file() and resolved.suffix.lower() in IMAGE_SUFFIXES:
+            return resolved
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--fallback-run-dir", type=Path,
+                        help="Optional checked-out run folder to use if the primary artifact is missing data")
     parser.add_argument("--candidate-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve()
     output_dir = args.output_dir.resolve()
-    candidate = load_candidate(run_dir, args.candidate_id)
+    try:
+        candidate = load_candidate(run_dir, args.candidate_id)
+    except (FileNotFoundError, ValueError):
+        if not args.fallback_run_dir:
+            raise
+        run_dir = args.fallback_run_dir.resolve()
+        candidate = load_candidate(run_dir, args.candidate_id)
+    fallback_run_dir = args.fallback_run_dir.resolve() if args.fallback_run_dir else None
     screenshot_record = candidate.get("screenshots") or {}
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
@@ -44,15 +77,11 @@ def main() -> int:
         record = screenshot_record.get(viewport) or {}
         if record.get("status") != "saved" or not record.get("path"):
             raise ValueError(f"Candidate {args.candidate_id} has no saved {viewport} screenshot")
-        source = (Path(record["path"]) if Path(record["path"]).is_absolute()
-                  else run_dir.parent.parent / Path(record["path"]))
-        source = source.resolve()
-        try:
-            source.relative_to(run_dir.parent.parent.resolve())
-        except ValueError as exc:
-            raise ValueError(f"Screenshot path escapes the repository: {source}") from exc
-        if not source.is_file() or source.suffix.lower() not in IMAGE_SUFFIXES:
-            raise FileNotFoundError(f"Saved {viewport} screenshot is unavailable: {source}")
+        source = resolve_screenshot(record["path"], run_dir)
+        if source is None and fallback_run_dir:
+            source = resolve_screenshot(record["path"], fallback_run_dir)
+        if source is None:
+            raise FileNotFoundError(f"Saved {viewport} screenshot is unavailable in the artifact or repository run")
         with Image.open(source) as image:
             original_size = image.size
             crop_height = min(viewport_crop_heights[viewport], image.height)
