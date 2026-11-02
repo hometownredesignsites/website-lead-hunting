@@ -83,8 +83,9 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         row = by_id[candidate_id]
         envelope = results.get(candidate_id) or {
             "candidate_id": candidate_id,
-            "status": "failed",
-            "error": "No review artifact was produced for this candidate.",
+            "status": "retry-needed",
+            "failure_class": "review_artifact_missing_or_run_interrupted",
+            "error": "No review artifact was produced; the candidate may have been interrupted and needs another review run.",
             "result": None,
         }
         if envelope.get("candidate_id") != candidate_id:
@@ -95,7 +96,16 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         successful = (envelope.get("status") == "passed" and valid_result
                       and result.get("status") == "passed"
                       and isinstance(review, dict) and review.get("candidate_id") == candidate_id)
-        status = "passed" if successful else "failed"
+        status = "passed" if successful else envelope.get("status")
+        if status not in {"failed", "retry-needed"}:
+            status = "failed"
+        if not successful and isinstance(result, dict) and result.get("status") == "failed":
+            errors = result.get("errors") or []
+            joined_errors = "; ".join(str(error) for error in errors)
+            if "candidate_id does not match" in joined_errors or "website_url does not match" in joined_errors:
+                status = "failed"
+            elif not envelope.get("error"):
+                envelope["error"] = joined_errors or "Review scorecard failed validation."
         statuses[status] = statuses.get(status, 0) + 1
         attempt = {
             "status": status,
@@ -103,8 +113,11 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
             "reviewed_at": envelope.get("completed_at") or now,
             "source_lead_hunt_run_id": str(source_run_id),
             "review_workflow_run_id": str(review_run_id),
+            "failure_class": envelope.get("failure_class"),
             "error": envelope.get("error") or (result.get("errors") if valid_result else None),
         }
+        if isinstance(envelope.get("attempts"), list):
+            attempt["attempts"] = envelope["attempts"]
         if successful:
             attempt.update(review)
             attempt["status"] = "passed"

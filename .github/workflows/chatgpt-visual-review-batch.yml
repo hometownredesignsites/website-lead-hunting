@@ -1,17 +1,11 @@
 name: ChatGPT visual review batch
 
 on:
-  push:
-    branches:
-      - git-chatgpt
-    paths:
-      - .github/workflows/chatgpt-visual-review-batch.yml
   workflow_dispatch:
     inputs:
       review_run_key:
         description: "Run key for the lead-hunt artifact containing the candidate ledger and screenshots"
         required: true
-        default: "westminster-kitchen-5site-e2e-20261102"
         type: string
       review_source_run_id:
         description: "Lead-hunt Actions run ID (from its Actions URL)"
@@ -38,6 +32,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       candidate_ids: ${{ steps.matrix.outputs.candidate_ids }}
       run_key: ${{ steps.validate.outputs.run_key }}
+      source_run_id: ${{ steps.validate.outputs.source_run_id }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -46,8 +41,8 @@ jobs:
         id: validate
         shell: bash
         env:
-          REVIEW_RUN_KEY: ${{ inputs.review_run_key || 'westminster-kitchen-5site-e2e-20261102' }}
-          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id || '41469121990' }}
+          REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
+          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
         run: |
           if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "review_run_key contains invalid characters" >&2
@@ -58,11 +53,12 @@ jobs:
             exit 1
           fi
           echo "run_key=$REVIEW_RUN_KEY" >> "$GITHUB_OUTPUT"
+          echo "source_run_id=$REVIEW_SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Build bounded candidate matrix
         id: matrix
         env:
-          REVIEW_CANDIDATE_IDS: ${{ inputs.review_candidate_ids || '0001-kakitchenremodelsandmore_com,0001-carusokitchens_com,0001-christiescompleteservices_com,0001-blueribbonext_com,0001-drapershomerenovations_com' }}
+          REVIEW_CANDIDATE_IDS: ${{ inputs.review_candidate_ids }}
         run: |
           python tools/build_visual_review_matrix.py \
             --candidate-ids "$REVIEW_CANDIDATE_IDS" \
@@ -71,7 +67,7 @@ jobs:
   review_site:
     needs: plan
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -95,9 +91,9 @@ jobs:
         uses: actions/download-artifact@v7
         continue-on-error: true
         with:
-          name: lead-hunt-${{ needs.plan.outputs.run_key }}-${{ inputs.review_source_run_id || '41469121990' }}
+          name: lead-hunt-${{ needs.plan.outputs.run_key }}-${{ needs.plan.outputs.source_run_id }}
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.review_source_run_id || '41469121990' }}
+          run-id: ${{ needs.plan.outputs.source_run_id }}
           path: artifacts/lead-hunt-source/runs/${{ needs.plan.outputs.run_key }}
 
       - name: Prepare this candidate's four screenshots
@@ -107,7 +103,6 @@ jobs:
         env:
           REVIEW_RUN_KEY: ${{ needs.plan.outputs.run_key }}
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
-          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id || '41469121990' }}
         run: |
           ARTIFACT_RUN_DIR="artifacts/lead-hunt-source/runs/$REVIEW_RUN_KEY"
           if [[ ! -f "$ARTIFACT_RUN_DIR/CANDIDATE_LEDGER.jsonl" ]]; then
@@ -119,7 +114,7 @@ jobs:
             --candidate-id "$REVIEW_CANDIDATE_ID" \
             --output-dir "artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/website-review"
 
-      - name: Submit four screenshots using a fresh ChatGPT browser session
+      - name: Assess screenshots with up to three fresh ChatGPT sessions
         id: review
         if: steps.prepare.outcome == 'success'
         continue-on-error: true
@@ -128,39 +123,109 @@ jobs:
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
         run: |
           REVIEW_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID"
-          set +e
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python tools/chatgpt_file_playwright_anonymous_ci.py \
-              --stage-name chatgpt_visual_review \
-              --input-file "$REVIEW_DIR/website-review/prompt.txt" \
-              --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
-              --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
-              --output-file "$REVIEW_DIR/response.md" \
-              --metadata-output-file "$REVIEW_DIR/metadata.json" \
-              --success-screenshot "$REVIEW_DIR/chatgpt-response.png" \
-              --error-screenshot "$REVIEW_DIR/chatgpt-error.png" \
-              --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID" \
-              --allow-retry \
-              --refresh-before-retry \
-              --wait-seconds 70 \
-              --timeout-ms 120000 \
-              --post-response-wait-seconds 2 \
-              --response-settle-seconds 2 \
-              --max-settle-wait-seconds 30 \
-              --expect-review-score \
-              --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
-              --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
-              --image-file "$REVIEW_DIR/website-review/mobile_top.jpg" \
-              --image-file "$REVIEW_DIR/website-review/mobile_mid.jpg"
-          review_rc=$?
-          if [[ "$review_rc" -eq 0 ]]; then
-            python tools/validate_chatgpt_visual_review.py \
-              --response "$REVIEW_DIR/response.md" \
-              --metadata "$REVIEW_DIR/metadata.json" \
-              --context "$REVIEW_DIR/website-review/candidate-context.json" \
-              --output "$REVIEW_DIR/website-review/review-result.json" || review_rc=$?
+          ATTEMPT_ROOT="$REVIEW_DIR/attempts"
+          mkdir -p "$ATTEMPT_ROOT"
+          final_status="retry-needed"
+          for attempt in 1 2 3; do
+            ATTEMPT_DIR="$ATTEMPT_ROOT/$attempt"
+            mkdir -p "$ATTEMPT_DIR"
+            review_rc=0
+            timeout --signal=TERM --kill-after=10s 240s \
+              xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+                python tools/chatgpt_file_playwright_anonymous_ci.py \
+                  --stage-name chatgpt_visual_review \
+                  --input-file "$REVIEW_DIR/website-review/prompt.txt" \
+                  --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
+                  --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
+                  --output-file "$ATTEMPT_DIR/response.md" \
+                  --metadata-output-file "$ATTEMPT_DIR/metadata.json" \
+                  --success-screenshot "$ATTEMPT_DIR/chatgpt-response.png" \
+                  --error-screenshot "$ATTEMPT_DIR/chatgpt-error.png" \
+                  --network-log \
+                  --network-log-file "$ATTEMPT_DIR/chatgpt-network.log" \
+                  --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-$attempt" \
+                  --wait-seconds 70 \
+                  --timeout-ms 120000 \
+                  --post-response-wait-seconds 2 \
+                  --response-settle-seconds 2 \
+                  --max-settle-wait-seconds 30 \
+                  --expect-review-score \
+                  --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
+                  --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
+                  --image-file "$REVIEW_DIR/website-review/mobile_top.jpg" \
+                  --image-file "$REVIEW_DIR/website-review/mobile_mid.jpg" \
+                  > "$ATTEMPT_DIR/runner.log" 2>&1 || review_rc=$?
+
+            if [[ "$review_rc" -eq 0 ]]; then
+              python tools/validate_chatgpt_visual_review.py \
+                --response "$ATTEMPT_DIR/response.md" \
+                --metadata "$ATTEMPT_DIR/metadata.json" \
+                --context "$REVIEW_DIR/website-review/candidate-context.json" \
+                --output "$ATTEMPT_DIR/review-result.json" \
+                > "$ATTEMPT_DIR/validation.log" 2>&1 || review_rc=$?
+            fi
+
+            python - "$ATTEMPT_DIR" "$review_rc" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from tools.visual_review_status import classify_attempt
+          attempt_dir = Path(sys.argv[1])
+          exit_code = int(sys.argv[2])
+          result_path = attempt_dir / "review-result.json"
+          result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
+          runner_log_path = attempt_dir / "runner.log"
+          runner_log = runner_log_path.read_text(encoding="utf-8", errors="replace") if runner_log_path.is_file() else ""
+          decision = classify_attempt(
+              source_artifact_available=True,
+              preparation_ok=True,
+              process_exit_code=exit_code,
+              result=result,
+              runner_log_text=runner_log,
+          )
+          decision["attempt"] = int(attempt_dir.name)
+          (attempt_dir / "attempt-status.json").write_text(json.dumps(decision, indent=2) + "\n", encoding="utf-8")
+          print(decision["status"])
+          PY
+            attempt_status=$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' "$ATTEMPT_DIR/attempt-status.json")
+            final_status="$attempt_status"
+            if [[ "$attempt_status" == "passed" ]]; then
+              cp "$ATTEMPT_DIR/review-result.json" "$REVIEW_DIR/website-review/review-result.json"
+              cp "$ATTEMPT_DIR/response.md" "$REVIEW_DIR/response.md"
+              cp "$ATTEMPT_DIR/metadata.json" "$REVIEW_DIR/metadata.json"
+              break
+            fi
+            if [[ "$attempt_status" == "failed" ]]; then
+              break
+            fi
+          done
+
+          if [[ "$final_status" != "passed" ]]; then
+            LAST_ATTEMPT_DIR="$ATTEMPT_ROOT/$attempt"
+            [[ ! -f "$LAST_ATTEMPT_DIR/review-result.json" ]] || cp "$LAST_ATTEMPT_DIR/review-result.json" "$REVIEW_DIR/website-review/review-result.json"
+            [[ ! -f "$LAST_ATTEMPT_DIR/response.md" ]] || cp "$LAST_ATTEMPT_DIR/response.md" "$REVIEW_DIR/response.md"
+            [[ ! -f "$LAST_ATTEMPT_DIR/metadata.json" ]] || cp "$LAST_ATTEMPT_DIR/metadata.json" "$REVIEW_DIR/metadata.json"
           fi
-          exit "$review_rc"
+
+          python - "$REVIEW_DIR" "$final_status" <<'PY'
+          import json, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          review_dir = Path(sys.argv[1])
+          attempts = []
+          for path in sorted((review_dir / "attempts").glob("*/attempt-status.json"), key=lambda p: int(p.parent.name)):
+              attempts.append(json.loads(path.read_text(encoding="utf-8")))
+          envelope = {
+              "candidate_id": review_dir.name,
+              "status": sys.argv[2],
+              "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "failure_class": attempts[-1].get("failure_class") if attempts and sys.argv[2] != "passed" else None,
+              "error": attempts[-1].get("error") if attempts and sys.argv[2] != "passed" else None,
+              "attempts": attempts,
+          }
+          (review_dir / "review-envelope.json").write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
+          with open(Path(__import__("os").environ["GITHUB_OUTPUT"]), "a", encoding="utf-8") as output:
+              output.write(f"status={envelope['status']}\n")
+          PY
 
       - name: Write per-candidate terminal status
         id: envelope
@@ -168,7 +233,7 @@ jobs:
         env:
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
           PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
-          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outputs.status || steps.review.outcome }}
           SOURCE_ARTIFACT_OUTCOME: ${{ steps.source_artifact.outcome }}
         run: |
           python - <<'PY'
@@ -179,23 +244,35 @@ jobs:
           review_dir = Path("artifacts/chatgpt-visual-review") / candidate_id
           result_path = review_dir / "website-review" / "review-result.json"
           result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
-          passed = bool(result and result.get("status") == "passed")
-          error = None
-          if not passed:
-              error = "Review result did not validate."
-              if os.environ.get("PREPARE_OUTCOME") != "success":
-                  error = "Candidate screenshots could not be prepared from the source artifact."
-              elif os.environ.get("REVIEW_OUTCOME") not in {"success", "skipped"}:
-                  error = "ChatGPT submission or response validation failed."
-              elif result and result.get("errors"):
-                  error = "; ".join(result["errors"])
+          source_available = os.environ.get("SOURCE_ARTIFACT_OUTCOME") == "success"
+          preparation_ok = os.environ.get("PREPARE_OUTCOME") == "success"
+          attempts = []
+          for path in sorted((review_dir / "attempts").glob("*/attempt-status.json"), key=lambda p: int(p.parent.name)):
+              attempts.append(json.loads(path.read_text(encoding="utf-8")))
+          if attempts:
+              decision = attempts[-1]
+              status = decision["status"]
+              failure_class = decision.get("failure_class")
+              error = decision.get("error")
+          else:
+              from tools.visual_review_status import classify_attempt
+              decision = classify_attempt(
+                  source_artifact_available=source_available,
+                  preparation_ok=preparation_ok,
+                  process_exit_code=None,
+                  result=result,
+                  preparation_error="Candidate screenshots could not be prepared from the source artifact.",
+              )
+              status, failure_class, error = decision["status"], decision["failure_class"], decision["error"]
           envelope = {
               "candidate_id": candidate_id,
-              "status": "passed" if passed else "failed",
+              "status": status,
               "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "source_artifact_outcome": os.environ.get("SOURCE_ARTIFACT_OUTCOME"),
               "prepare_outcome": os.environ.get("PREPARE_OUTCOME"),
               "review_outcome": os.environ.get("REVIEW_OUTCOME"),
+              "failure_class": failure_class,
+              "attempts": attempts,
               "error": error,
           }
           review_dir.mkdir(parents=True, exist_ok=True)
@@ -244,7 +321,7 @@ jobs:
         env:
           RUN_KEY: ${{ needs.plan.outputs.run_key }}
           CANDIDATE_IDS: ${{ needs.plan.outputs.candidate_ids }}
-          SOURCE_RUN_ID: ${{ inputs.review_source_run_id || '41469121990' }}
+          SOURCE_RUN_ID: ${{ needs.plan.outputs.source_run_id }}
           REVIEW_RUN_ID: ${{ github.run_id }}
         run: |
           python tools/merge_chatgpt_visual_reviews.py \
@@ -283,5 +360,5 @@ jobs:
       - name: Report partial review failures
         if: always() && (needs.review_site.result != 'success' || steps.merge.outcome != 'success')
         run: |
-          echo "One or more candidate visual reviews failed. Successful scorecards and per-candidate failure status were saved where available. See the run summary and review artifacts."
+          echo "One or more candidate visual reviews failed or need retry. Successful scorecards, attempt diagnostics, and per-candidate status were saved where available. See the run summary and review artifacts."
           exit 1

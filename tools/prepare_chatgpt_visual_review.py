@@ -10,6 +10,16 @@ from PIL import Image
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+DESKTOP_MIN_WIDTH = 768
+
+
+def validate_source_viewport(viewport: str, width: int, height: int, source: Path) -> None:
+    if width <= 0 or height <= 0:
+        raise ValueError(f"{viewport} screenshot has invalid dimensions: {source}")
+    if viewport == "desktop" and width < DESKTOP_MIN_WIDTH:
+        raise ValueError(f"Desktop screenshot appears mismatched (width {width}px): {source}")
+    if viewport == "mobile" and width >= DESKTOP_MIN_WIDTH:
+        raise ValueError(f"Mobile screenshot appears mismatched (width {width}px): {source}")
 
 
 def load_candidate(run_dir: Path, candidate_id: str) -> dict:
@@ -77,6 +87,7 @@ def main() -> int:
             )
         with Image.open(source) as image:
             original_size = image.size
+            validate_source_viewport(viewport, image.width, image.height, source)
             crop_height = min(viewport_crop_heights[viewport], image.height)
             max_scroll = max(0, image.height - crop_height)
             mid_page_scroll_fraction = mid_page_scroll_fractions[viewport]
