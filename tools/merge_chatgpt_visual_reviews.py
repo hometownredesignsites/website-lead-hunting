@@ -156,7 +156,9 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2))
-    return 0 if summary["failed"] == 0 else 1
+    # Candidate-level review failures are durable outcomes, not merge errors.
+    # The workflow should succeed when it records them alongside successful scores.
+    return 0
 
 
 if __name__ == "__main__":

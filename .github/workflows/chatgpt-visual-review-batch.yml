@@ -290,9 +290,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Mark this candidate review outcome
+      - name: Report this candidate review outcome
         if: always() && steps.envelope.outputs.status != 'passed'
-        run: exit 1
+        env:
+          REVIEW_STATUS: ${{ steps.envelope.outputs.status }}
+          REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+        run: echo "Candidate $REVIEW_CANDIDATE_ID ended with status $REVIEW_STATUS; its diagnostics and status are saved in the candidate artifact."
 
   merge_reviews:
     needs: [plan, review_site]
@@ -357,8 +360,12 @@ jobs:
             echo "No candidate review changes to commit."
           fi
 
-      - name: Report partial review failures
-        if: always() && (needs.review_site.result != 'success' || steps.merge.outcome != 'success')
+      - name: Report candidate job interruptions
+        if: always() && needs.review_site.result != 'success'
+        run: echo "One or more candidate jobs did not complete normally. Their missing results are recorded as retry-needed; see the run summary and per-candidate artifacts."
+
+      - name: Fail if the review merge could not be written
+        if: always() && steps.merge.outcome != 'success'
         run: |
-          echo "One or more candidate visual reviews failed or need retry. Successful scorecards, attempt diagnostics, and per-candidate status were saved where available. See the run summary and review artifacts."
+          echo "The review results could not be merged into the candidate ledger. See the merge step diagnostics."
           exit 1
