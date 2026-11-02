@@ -140,12 +140,14 @@ def audit_run(run_dir: Path) -> dict:
     human_reviews = Counter(review_status(row, "human_review") for row in candidates)
     hermes_reviews = Counter(review_status(row, "hermes_visual_review") for row in candidates)
     audit_names = ("http_links_and_resources", "broken_images", "contact_form_privacy",
+                   "contact_email_opportunity",
                    "broken_links_and_interactions", "latest_blog_post", "content_freshness",
                    "copyright_footer_signal", "legacy_twitter_branding")
     site_audit_statuses: dict[str, Counter] = {name: Counter() for name in audit_names}
     site_audit_candidates = 0
     legacy_twitter_detected = 0
     old_copyright_footer_detected = 0
+    consumer_email_domain_mismatches = 0
     for row in candidates:
         checks = row.get("site_checks") or (row.get("evidence") or {}).get("site_checks") or {}
         if not isinstance(checks, dict) or not checks:
@@ -161,6 +163,8 @@ def audit_run(run_dir: Path) -> dict:
             legacy_twitter_detected += 1
         if (checks.get("copyright_footer_signal") or {}).get("older_years"):
             old_copyright_footer_detected += 1
+        if (checks.get("contact_email_opportunity") or {}).get("consumer_provider_domain_mismatch"):
+            consumer_email_domain_mismatches += 1
     screenshot_paths = 0
     screenshots_present = 0
     for row in candidates:
@@ -206,6 +210,7 @@ def audit_run(run_dir: Path) -> dict:
         "site_audit_statuses": {name: dict(sorted(counts.items())) for name, counts in site_audit_statuses.items()},
         "legacy_twitter_logo_candidates": legacy_twitter_detected,
         "old_copyright_footer_candidates": old_copyright_footer_detected,
+        "consumer_email_domain_mismatch_candidates": consumer_email_domain_mismatches,
         "human_review_statuses": dict(sorted(human_reviews.items())),
         "hermes_visual_review_statuses": dict(sorted(hermes_reviews.items())),
         "candidate_screenshots_present": screenshots_present,
@@ -270,6 +275,9 @@ def summary_markdown(summary: dict) -> str:
         elif name == "copyright_footer_signal":
             finding = (f"{summary['old_copyright_footer_candidates']} possible stale footer(s); "
                        "copyright years do not count as content freshness")
+        elif name == "contact_email_opportunity":
+            finding = (f"{summary['consumer_email_domain_mismatch_candidates']} consumer email/domain mismatch(es); "
+                       "weak opportunity clue")
         else:
             finding = (f"{counts.get('issues_found', 0)} issue(s); "
                        f"{counts.get('partial', 0)} partial; {counts.get('unknown', 0)} unknown")

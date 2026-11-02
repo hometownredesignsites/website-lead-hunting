@@ -262,10 +262,21 @@ def score_signals(metrics: dict) -> dict:
     earned = sum(SCORE_WEIGHTS[key] for key, issue in applicable.items() if issue)
     score = round(100 * earned / total) if total else None
     enough = len(applicable) >= 5 and not metrics.get("assessment_error")
+    technical_priority = "uncertain" if not enough else "high" if score >= 61 else "medium" if score >= 41 else "pass"
+    email_signal = ((metrics.get("site_checks") or {}).get("contact_email_opportunity") or {})
+    email_bonus = 5 if (enough and technical_priority in {"high", "medium"} and
+                        email_signal.get("consumer_provider_domain_mismatch")) else 0
+    if score is not None and email_bonus:
+        score = min(100, score + email_bonus)
     priority = "uncertain" if not enough else "high" if score >= 61 else "medium" if score >= 41 else "pass"
     return {"automated_priority": priority, "website_opportunity_score": score,
-            "score_basis": "normalized score from directly observable technical signals; visual judgment is pending",
+            "technical_priority_before_email_bonus": technical_priority,
+            "email_opportunity_bonus_points": email_bonus,
+            "score_basis": "normalized technical score plus up to 5 opportunity points for a detected consumer email domain on an initial medium/high candidate; visual judgment is pending",
             "signals": {key: "unknown" if value is None else "issue" if value else "clear" for key, value in checks.items()},
+            "opportunity_signals": {"consumer_email_domain_mismatch":
+                                    "observed" if email_signal.get("consumer_provider_domain_mismatch") else
+                                    "not_observed" if "consumer_provider_domain_mismatch" in email_signal else "unknown"},
             "evidence": metrics, "evidence_confidence": "sufficient" if enough else "limited"}
 
 
@@ -534,6 +545,9 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
                 "site_title": metrics.get("title", ""), "automated_priority": signals["automated_priority"],
                 "website_opportunity_score": signals["website_opportunity_score"],
                 "score_basis": signals["score_basis"], "signals": signals["signals"],
+                "technical_priority_before_email_bonus": signals["technical_priority_before_email_bonus"],
+                "email_opportunity_bonus_points": signals["email_opportunity_bonus_points"],
+                "opportunity_signals": signals["opportunity_signals"],
                 "evidence": metrics, "screenshots": shots, "evidence_confidence": signals["evidence_confidence"],
                 "site_checks": metrics.get("site_checks", {"status": "unknown"}),
                 "hermes_visual_review": "pending", "human_review": "pending"}
@@ -548,6 +562,9 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
                 "final_url": page.url, "automated_priority": signals["automated_priority"],
                 "website_opportunity_score": signals["website_opportunity_score"],
                 "score_basis": signals["score_basis"], "signals": signals["signals"],
+                "technical_priority_before_email_bonus": signals["technical_priority_before_email_bonus"],
+                "email_opportunity_bonus_points": signals["email_opportunity_bonus_points"],
+                "opportunity_signals": signals["opportunity_signals"],
                 "evidence": metrics, "screenshots": shots,
                 "evidence_confidence": "limited", "hermes_visual_review": "pending",
                 "human_review": "pending"}

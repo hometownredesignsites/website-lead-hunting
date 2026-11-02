@@ -24,6 +24,14 @@ BLOG_RE = re.compile(r"blog|news|journal|articles|stories|updates", re.I)
 PROJECT_RE = re.compile(r"portfolio|projects|case-stud|gallery|our-work|recent-work", re.I)
 PRIVACY_RE = re.compile(r"privacy", re.I)
 DATE_KEYS = {"datepublished", "datemodified", "datecreated", "lastreviewed"}
+EMAIL_RE = re.compile(r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+", re.I)
+CONSUMER_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "yahoo.ca", "yahoo.co.jp",
+    "yahoo.com.au", "ymail.com", "rocketmail.com", "outlook.com", "outlook.co.uk",
+    "hotmail.com", "hotmail.co.uk", "live.com", "live.co.uk", "msn.com", "aol.com", "icloud.com", "me.com",
+    "mac.com", "proton.me", "protonmail.com", "pm.me", "mail.com", "gmx.com", "gmx.net",
+    "fastmail.com", "tutanota.com", "tuta.com", "yandex.com", "yandex.ru", "comcast.net", "att.net", "verizon.net",
+}
 
 
 def _is_http(url: str) -> bool:
@@ -77,6 +85,33 @@ def _same_site(url: str, base_url: str) -> bool:
     return bool(_host(url)) and _host(url) == _host(base_url)
 
 
+def _classify_contact_emails(emails: list[str], website_url: str) -> dict:
+    website_host = _host(website_url)
+    findings, seen = [], set()
+    for email in emails:
+        email = (email or "").strip().strip(".,;:<>\"'()[]{}")
+        if not EMAIL_RE.fullmatch(email):
+            continue
+        normalized = email.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        domain = normalized.rsplit("@", 1)[1].rstrip(".")
+        same_brand_domain = bool(website_host) and (
+            domain == website_host or domain.endswith("." + website_host) or website_host.endswith("." + domain))
+        provider = next((known for known in sorted(CONSUMER_EMAIL_DOMAINS)
+                         if domain == known or domain.endswith("." + known)), None)
+        findings.append({"email": normalized, "email_domain": domain,
+                         "matches_website_domain": same_brand_domain,
+                         "consumer_provider": provider})
+    consumer_mismatch = [row for row in findings if row["consumer_provider"] and not row["matches_website_domain"]]
+    return {"status": "consumer_provider_found" if consumer_mismatch else "business_domain_found" if findings else "not_found",
+            "emails_found": findings[:30], "email_count": len(findings),
+            "consumer_provider_domain_mismatch": bool(consumer_mismatch),
+            "opportunity_bonus_points": 5 if consumer_mismatch else 0,
+            "scope_note": "Publicly displayed email addresses are a weak small-business clue, not proof of business size or redesign need."}
+
+
 def _iso_date(value: str | None) -> str | None:
     value = (value or "").strip()
     if not value:
@@ -104,6 +139,7 @@ class PageEvidenceParser(HTMLParser):
         self.blog_links: list[str] = []
         self.project_links: list[str] = []
         self.contact_links: list[str] = []
+        self.emails: list[str] = []
         self.last_modified: str | None = None
         self._article_depth = 0
         self._article_links: list[str] = []
@@ -123,6 +159,8 @@ class PageEvidenceParser(HTMLParser):
                 self._article_links, self._article_dates = [], []
         if tag == "a" and values.get("href"):
             href = urljoin(self.page_url, values["href"])
+            if href.lower().startswith("mailto:"):
+                self.emails.extend(EMAIL_RE.findall(href[7:].split("?", 1)[0]))
             self._anchor = {"href": href, "text": ""}
             if self._article_depth:
                 self._article_links.append(href)
@@ -183,6 +221,7 @@ class PageEvidenceParser(HTMLParser):
             self._script_chunks = []
 
     def handle_data(self, data: str) -> None:
+        self.emails.extend(EMAIL_RE.findall(data))
         if self._anchor is not None:
             self._anchor["text"] = (self._anchor["text"] + " " + data).strip()[:300]
         if self._script_jsonld:
@@ -301,6 +340,11 @@ async def collect_dom_facts(page) -> dict:
       const anchors = [...document.querySelectorAll('a[href]')].map(a => ({
         href: a.href, raw_href: a.getAttribute('href') || '', text: (a.innerText || a.getAttribute('aria-label') || '').trim().slice(0, 240),
         target: a.target || '', rel: a.rel || ''})).slice(0, 500);
+      const emailPattern = /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/ig;
+      const emails = new Set((document.body?.innerText || '').match(emailPattern) || []);
+      for (const a of document.querySelectorAll('a[href^="mailto:"]')) {
+        for (const email of (a.getAttribute('href') || '').slice(7).split('?')[0].match(emailPattern) || []) emails.add(email);
+      }
       const resources = [];
       for (const el of document.querySelectorAll('img,source,script[src],iframe[src],video[src],video[poster],audio[src],link[href]')) {
         const item = attrs(el);
@@ -379,9 +423,33 @@ async def collect_dom_facts(page) -> dict:
         new URL(a.href).pathname === location.pathname && new URL(a.href).hash.length > 1 &&
         !anchors_on_page.has(decodeURIComponent(new URL(a.href).hash.slice(1))))
         .map(a => ({url: a.href, text: a.text}));
-      return {url: location.href, form_count: document.forms.length, forms: [...document.forms].slice(0, 20).map(f => ({
+      const formDetails = [...document.forms].slice(0, 20).map(f => ({
           action: new URL(f.getAttribute('action') || location.href, location.href).href, method: (f.method || 'get').toUpperCase(),
-          fields: f.querySelectorAll('input,textarea,select').length})),
+          fields: f.querySelectorAll('input,textarea,select').length, detection_method: 'html_form'}));
+      const inferredGroups = new Set();
+      for (const submitter of document.querySelectorAll('button,input[type="submit"],input[type="image"]')) {
+        const isSubmitter = submitter.matches('input[type="submit"],input[type="image"]') ||
+          (submitter.tagName.toLowerCase() === 'button' && submitter.type === 'submit');
+        if (!isSubmitter) continue;
+        if (!visible(submitter) || submitter.closest('form')) continue;
+        let parent = submitter.parentElement;
+        for (let depth = 0; parent && depth < 7; depth++, parent = parent.parentElement) {
+          const fields = [...parent.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]),textarea,select')]
+            .filter(visible);
+          const evidence = `${parent.id || ''} ${String(parent.className || '')}`;
+          if (fields.length >= 2 && /form|contact|email|message|quote|inquir|request/i.test(evidence)) {
+            inferredGroups.add(parent);
+            break;
+          }
+        }
+      }
+      const inferredForms = [...inferredGroups].slice(0, 20).map(group => ({
+        action: location.href, method: null,
+        fields: group.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]),textarea,select').length,
+        detection_method: 'visible_form_like_controls'}));
+      const forms = [...formDetails, ...inferredForms].slice(0, 20);
+      return {url: location.href, form_count: document.forms.length + inferredForms.length, forms,
+        emails: [...emails].slice(0, 30),
         title: document.title, viewport_meta: !!document.querySelector('meta[name="viewport"]'),
         document_width: document.documentElement.scrollWidth, viewport_width: document.documentElement.clientWidth,
         image_count: images.length, loaded_image_count: images.filter(i => i.complete && i.natural_width > 0).length,
@@ -451,6 +519,7 @@ async def _request_page(context, url: str, public_cache: dict[str, bool], public
         parsed.feed(body)
         return {"url": url, "final_url": final_url, "status": response.status,
                 "redirected": bool(redirect_chain), "redirect_chain": redirect_chain, "form_count": parsed.forms,
+        "emails": sorted(set(parsed.emails))[:30],
         "privacy_links": sorted(set(parsed.privacy_links)), "blog_links": sorted(set(parsed.blog_links)),
         "project_links": sorted(set(parsed.project_links)),
                 "contact_links": sorted(set(parsed.contact_links)), "date_candidates": parsed.date_candidates,
@@ -720,26 +789,31 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
     image_request_failures = [row for row in failed_events if row.get("resource_type") == "image"]
     images_status = "issues_found" if failed_images or image_request_failures else "partial" if facts.get("pending_images") or not facts.get("image_loading", {}).get("complete", True) else "clear"
 
-    # Inspect one linked contact page when the homepage itself doesn't expose a form.
+    # Inspect linked contact pages when the homepage lacks either a form or a public email.
     contact_pages = []
     form_count = facts.get("form_count", 0)
-    if not form_count:
+    emails = list(facts.get("emails", []))
+    if not form_count or not emails:
         for candidate in facts.get("contact_links", [])[:2]:
             if _same_site(candidate, base_url):
                 checked_page, error = await _request_page(page.context, candidate, public_host_cache, public_host_fn, base_url)
                 if checked_page:
                     contact_pages.append(checked_page)
                     form_count += checked_page.get("form_count", 0)
+                    emails.extend(checked_page.get("emails", []))
                 elif error:
                     contact_pages.append({"url": candidate, "error": error})
-                if form_count:
+                if form_count and emails:
                     break
     privacy_links = sorted(set(facts.get("privacy_links", []) + [url for cp in contact_pages for url in cp.get("privacy_links", [])]))
     form_privacy = {"status": "issues_found" if form_count and not privacy_links else "clear" if form_count and privacy_links else "not_applicable",
                     "form_detected": form_count > 0, "form_count": form_count,
+                    "forms_detected": facts.get("forms", [])[:20],
                     "privacy_policy_link_found": bool(privacy_links), "privacy_policy_links": privacy_links[:20],
                     "pages_inspected": [base_url] + [cp.get("final_url") or cp.get("url") for cp in contact_pages],
                     "scope_note": "Presence only; this does not assess legal adequacy. Contact-page checks are limited to linked same-site pages."}
+    email_opportunity = _classify_contact_emails(emails, base_url)
+    email_opportunity["pages_inspected"] = [base_url] + [cp.get("final_url") or cp.get("url") for cp in contact_pages]
 
     # Discover linked blog/news pages. If none are linked, try a few conventional read-only routes.
     blog_candidates = [url for url in facts.get("blog_links", []) if _same_site(url, base_url)]
@@ -856,6 +930,7 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
             "images": failed_images[:60], "request_failures": image_request_failures[:60],
             "pending_images": facts.get("pending_images", [])[:30]},
         "contact_form_privacy": form_privacy,
+        "contact_email_opportunity": email_opportunity,
         "broken_links_and_interactions": {"status": "issues_found" if broken_links or fragment_issues or interactions["status"] == "issues_found" or console_errors else "clear",
             "internal_links_checked": len(internal_checked), "broken_internal_links": broken_links[:60],
             "broken_same_page_anchors": fragment_issues[:60], "interactions": interactions,
