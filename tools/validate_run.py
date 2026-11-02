@@ -139,6 +139,8 @@ def audit_run(run_dir: Path) -> dict:
     site_statuses = Counter(str(row.get("site_check_status") or "unknown") for row in candidates)
     human_reviews = Counter(review_status(row, "human_review") for row in candidates)
     hermes_reviews = Counter(review_status(row, "hermes_visual_review") for row in candidates)
+    chatgpt_reviews = Counter(review_status(row, "chatgpt_visual_review") for row in candidates)
+    chatgpt_review_attempts = Counter(review_status(row, "chatgpt_visual_review_last_attempt") for row in candidates)
     audit_names = ("http_links_and_resources", "broken_images", "contact_form_privacy",
                    "contact_email_opportunity",
                    "broken_links_and_interactions", "latest_blog_post", "content_freshness",
@@ -213,6 +215,8 @@ def audit_run(run_dir: Path) -> dict:
         "consumer_email_domain_mismatch_candidates": consumer_email_domain_mismatches,
         "human_review_statuses": dict(sorted(human_reviews.items())),
         "hermes_visual_review_statuses": dict(sorted(hermes_reviews.items())),
+        "chatgpt_visual_review_statuses": dict(sorted(chatgpt_reviews.items())),
+        "chatgpt_visual_review_attempt_statuses": dict(sorted(chatgpt_review_attempts.items())),
         "candidate_screenshots_present": screenshots_present,
         "candidate_screenshot_paths": screenshot_paths,
         "screenshots_purged_at": manifest.get("screenshots_purged_at"),
@@ -260,6 +264,8 @@ def summary_markdown(summary: dict) -> str:
     lines.extend(["", "## Candidate review", "", "| Review state | Count |", "|---|---:|"])
     review_states = {f"Human: {key}": value for key, value in summary["human_review_statuses"].items()}
     review_states.update({f"Hermes visual: {key}": value for key, value in summary["hermes_visual_review_statuses"].items()})
+    review_states.update({f"ChatGPT visual scorecard: {key}": value for key, value in summary["chatgpt_visual_review_statuses"].items()})
+    review_states.update({f"ChatGPT visual last attempt: {key}": value for key, value in summary["chatgpt_visual_review_attempt_statuses"].items()})
     lines.extend(f"| {status} | {count} |" for status, count in sorted(review_states.items()))
     lines.extend(["", "## Automated website checks", "",
                   f"Structured site checks are available for {summary['site_audit_candidates']}/{summary['unique_candidate_domains']} candidates. Findings are evidence; they do not replace human visual review.",
@@ -289,7 +295,7 @@ def summary_markdown(summary: dict) -> str:
         if items:
             lines.extend(["", f"## {heading}", ""])
             lines.extend(f"- {item}" for item in items)
-    lines.extend(["", "Detailed per-query results and source evidence remain in `QUERY_LEDGER.jsonl`; candidate assessments and human decisions remain in `CANDIDATE_LEDGER.jsonl`.", ""])
+    lines.extend(["", "Detailed per-query results and source evidence remain in `QUERY_LEDGER.jsonl`; candidate assessments, visual scorecards, and human decisions remain in `CANDIDATE_LEDGER.jsonl`.", ""])
     return "\n".join(lines)
 
 

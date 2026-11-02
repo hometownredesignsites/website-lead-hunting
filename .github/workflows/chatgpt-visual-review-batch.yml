@@ -1,0 +1,282 @@
+name: ChatGPT visual review batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      review_run_key:
+        description: "Run key for the lead-hunt artifact containing the candidate ledger and screenshots"
+        required: true
+        default: "westminster-kitchen-5site-e2e-20261102"
+        type: string
+      review_source_run_id:
+        description: "Lead-hunt Actions run ID (from its Actions URL)"
+        required: true
+        type: string
+      review_candidate_ids:
+        description: "Candidate IDs separated by commas or newlines (up to 20)"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+# Share the branch lock with lead-hunt so the ledger update cannot race a lead-hunt commit.
+concurrency:
+  group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      candidate_ids: ${{ steps.matrix.outputs.candidate_ids }}
+      run_key: ${{ steps.validate.outputs.run_key }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Validate batch and run key
+        id: validate
+        shell: bash
+        env:
+          REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
+          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+        run: |
+          if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+            echo "review_run_key contains invalid characters" >&2
+            exit 1
+          fi
+          if ! [[ "$REVIEW_SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "review_source_run_id must be a numeric GitHub Actions run ID" >&2
+            exit 1
+          fi
+          echo "run_key=$REVIEW_RUN_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Build bounded candidate matrix
+        id: matrix
+        env:
+          REVIEW_CANDIDATE_IDS: ${{ inputs.review_candidate_ids }}
+        run: |
+          python tools/build_visual_review_matrix.py \
+            --candidate-ids "$REVIEW_CANDIDATE_IDS" \
+            --github-output "$GITHUB_OUTPUT"
+
+  review_site:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.58.0-noble
+      options: --user root
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install pinned Python dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m playwright install chromium
+          mkdir -p artifacts/chatgpt-visual-review tmp
+          rm -rf tmp/chatgpt-visual-review-profile
+
+      - name: Download lead-hunt artifact for this candidate
+        id: source_artifact
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: lead-hunt-${{ needs.plan.outputs.run_key }}-${{ inputs.review_source_run_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.review_source_run_id }}
+          path: artifacts/lead-hunt-source/runs/${{ needs.plan.outputs.run_key }}
+
+      - name: Prepare this candidate's four screenshots
+        id: prepare
+        continue-on-error: true
+        shell: bash
+        env:
+          REVIEW_RUN_KEY: ${{ needs.plan.outputs.run_key }}
+          REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+        run: |
+          ARTIFACT_RUN_DIR="artifacts/lead-hunt-source/runs/$REVIEW_RUN_KEY"
+          if [[ ! -f "$ARTIFACT_RUN_DIR/CANDIDATE_LEDGER.jsonl" ]]; then
+            echo "Lead-hunt artifact is unavailable or expired; checked-out repository screenshots are not used as a fallback." >&2
+            exit 1
+          fi
+          python tools/prepare_chatgpt_visual_review.py \
+            --run-dir "$ARTIFACT_RUN_DIR" \
+            --candidate-id "$REVIEW_CANDIDATE_ID" \
+            --output-dir "artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/website-review"
+
+      - name: Submit four screenshots using a fresh ChatGPT browser session
+        id: review
+        if: steps.prepare.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+        run: |
+          REVIEW_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID"
+          set +e
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            python tools/chatgpt_file_playwright_anonymous_ci.py \
+              --stage-name chatgpt_visual_review \
+              --input-file "$REVIEW_DIR/website-review/prompt.txt" \
+              --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
+              --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
+              --output-file "$REVIEW_DIR/response.md" \
+              --metadata-output-file "$REVIEW_DIR/metadata.json" \
+              --success-screenshot "$REVIEW_DIR/chatgpt-response.png" \
+              --error-screenshot "$REVIEW_DIR/chatgpt-error.png" \
+              --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID" \
+              --allow-retry \
+              --refresh-before-retry \
+              --wait-seconds 70 \
+              --timeout-ms 120000 \
+              --post-response-wait-seconds 2 \
+              --response-settle-seconds 2 \
+              --max-settle-wait-seconds 30 \
+              --expect-review-score \
+              --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
+              --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
+              --image-file "$REVIEW_DIR/website-review/mobile_top.jpg" \
+              --image-file "$REVIEW_DIR/website-review/mobile_mid.jpg"
+          review_rc=$?
+          if [[ "$review_rc" -eq 0 ]]; then
+            python tools/validate_chatgpt_visual_review.py \
+              --response "$REVIEW_DIR/response.md" \
+              --metadata "$REVIEW_DIR/metadata.json" \
+              --context "$REVIEW_DIR/website-review/candidate-context.json" \
+              --output "$REVIEW_DIR/website-review/review-result.json" || review_rc=$?
+          fi
+          exit "$review_rc"
+
+      - name: Write per-candidate terminal status
+        id: envelope
+        if: always()
+        env:
+          REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          SOURCE_ARTIFACT_OUTCOME: ${{ steps.source_artifact.outcome }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          candidate_id = os.environ["REVIEW_CANDIDATE_ID"]
+          review_dir = Path("artifacts/chatgpt-visual-review") / candidate_id
+          result_path = review_dir / "website-review" / "review-result.json"
+          result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
+          passed = bool(result and result.get("status") == "passed")
+          error = None
+          if not passed:
+              error = "Review result did not validate."
+              if os.environ.get("PREPARE_OUTCOME") != "success":
+                  error = "Candidate screenshots could not be prepared from the source artifact."
+              elif os.environ.get("REVIEW_OUTCOME") not in {"success", "skipped"}:
+                  error = "ChatGPT submission or response validation failed."
+              elif result and result.get("errors"):
+                  error = "; ".join(result["errors"])
+          envelope = {
+              "candidate_id": candidate_id,
+              "status": "passed" if passed else "failed",
+              "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "source_artifact_outcome": os.environ.get("SOURCE_ARTIFACT_OUTCOME"),
+              "prepare_outcome": os.environ.get("PREPARE_OUTCOME"),
+              "review_outcome": os.environ.get("REVIEW_OUTCOME"),
+              "error": error,
+          }
+          review_dir.mkdir(parents=True, exist_ok=True)
+          (review_dir / "review-envelope.json").write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"status={envelope['status']}\n")
+          PY
+
+      - name: Upload candidate review and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: visual-review-${{ github.run_id }}-${{ matrix.candidate_id }}
+          path: artifacts/chatgpt-visual-review/${{ matrix.candidate_id }}/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Mark this candidate review outcome
+        if: always() && steps.envelope.outputs.status != 'passed'
+        run: exit 1
+
+  merge_reviews:
+    needs: [plan, review_site]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out the target branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Download per-candidate review artifacts
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          pattern: visual-review-${{ github.run_id }}-*
+          path: artifacts/visual-review-results
+          merge-multiple: false
+
+      - name: Merge scores and attempts into candidate records
+        id: merge
+        continue-on-error: true
+        env:
+          RUN_KEY: ${{ needs.plan.outputs.run_key }}
+          CANDIDATE_IDS: ${{ needs.plan.outputs.candidate_ids }}
+          SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+          REVIEW_RUN_ID: ${{ github.run_id }}
+        run: |
+          python tools/merge_chatgpt_visual_reviews.py \
+            --ledger "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" \
+            --results-dir artifacts/visual-review-results \
+            --candidate-ids "$CANDIDATE_IDS" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --review-run-id "$REVIEW_RUN_ID" \
+            --output "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json"
+
+      - name: Refresh validated run summary
+        if: always()
+        env:
+          RUN_KEY: ${{ needs.plan.outputs.run_key }}
+        run: python tools/validate_run.py --run-dir "runs/$RUN_KEY" --write-summary
+
+      - name: Commit durable scorecards and run summary
+        if: always()
+        shell: bash
+        env:
+          RUN_KEY: ${{ needs.plan.outputs.run_key }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" \
+            "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json" \
+            "runs/$RUN_KEY/RUN_SUMMARY.json" \
+            "runs/$RUN_KEY/RUN_SUMMARY.md"
+          if ! git diff --cached --quiet; then
+            git commit -m "Save ChatGPT visual reviews: $RUN_KEY"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "No candidate review changes to commit."
+          fi
+
+      - name: Report partial review failures
+        if: always() && (needs.review_site.result != 'success' || steps.merge.outcome != 'success')
+        run: |
+          echo "One or more candidate visual reviews failed. Successful scorecards and per-candidate failure status were saved where available. See the run summary and review artifacts."
+          exit 1
