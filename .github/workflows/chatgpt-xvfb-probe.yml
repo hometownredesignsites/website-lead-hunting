@@ -47,6 +47,7 @@ jobs:
 
       - name: Submit prompt with the ChatGPT runner under Xvfb
         id: probe
+        shell: bash
         env:
           CHATGPT_PROMPT: ${{ inputs.prompt }}
           ATTACH_TEST_IMAGE: ${{ inputs.attach_test_image }}
