@@ -97,6 +97,8 @@ def assistant_turns(page):
         "[data-testid^='conversation-turn-'][data-turn='assistant'] [data-message-author-role='assistant']",
         "[data-testid^='conversation-turn-'][data-turn='assistant']",
         "[data-message-author-role='assistant']",
+        # ChatGPT's anonymous mobile shell uses this attribute on message list items.
+        "[data-message-role='assistant']",
     ]
     for selector in selectors:
         locator = page.locator(selector)
@@ -118,11 +120,19 @@ def extract_response_text(assistant_messages, before_count: int, before_last_tex
     after_count = assistant_messages.count()
     if after_count == 0:
         return ""
-    if after_count > before_count:
-        return _normalize(assistant_messages.nth(after_count - 1).inner_text())
-    text = _normalize(assistant_messages.last.inner_text())
-    if text and text != before_last_text:
-        return text
+
+    # The ChatGPT anonymous shell may append empty assistant list items after a
+    # completed response (for example, for stopped/continuation UI state). Walk
+    # newest to oldest and return the latest actual message text instead of
+    # treating the final empty list item as an empty response.
+    start = min(before_count, after_count - 1) if after_count > before_count else 0
+    for index in range(after_count - 1, start - 1, -1):
+        try:
+            text = _normalize(assistant_messages.nth(index).inner_text())
+        except Exception:
+            continue
+        if text and text != before_last_text and not looks_like_non_answer_text(text):
+            return text
     return ""
 
 
