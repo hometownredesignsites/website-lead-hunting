@@ -62,6 +62,7 @@ jobs:
 
       - name: Prepare saved candidate screenshots for visual review
         if: inputs.review_saved_candidate
+        shell: bash
         env:
           REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
           REVIEW_CANDIDATE_ID: ${{ inputs.review_candidate_id }}
