@@ -17,6 +17,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+if __package__:
+    from .site_audit import PageObserver, load_lazy_images, run_site_checks
+else:  # Supports the workflow's direct `python tools/lead_hunt.py` invocation.
+    from site_audit import PageObserver, load_lazy_images, run_site_checks
 
 
 
@@ -466,8 +470,9 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
     if not public_host_cache[requested_host]:
         return {"site_check_status": "blocked_non_public_host", "domain": requested_host,
                 "reason": "Host is local, private, or did not resolve exclusively to public IP addresses"}
-    metrics: dict = {"https": urlsplit(url).scheme == "https"}
+    metrics: dict = {"requested_https": urlsplit(url).scheme == "https"}
     shots: dict = {}
+    observer = PageObserver(page)
     try:
         await page.set_viewport_size({"width": 1440, "height": 1000})
         started = time.monotonic()
@@ -497,7 +502,9 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
                     "final_url": final_url, "reason": "Final host is local, private, or unresolved"}
         metrics["http_status"] = response.status if response else None
         metrics["final_url"] = final_url
+        metrics["https"] = urlsplit(final_url).scheme.lower() == "https"
         metrics["title"] = await page.title()
+        image_loading = await load_lazy_images(page)
         metrics["desktop"] = await page_metrics(page)
         if logger:
             logger.emit("direct_site_navigation_completed", query_index=query.get("query_index"),
@@ -515,12 +522,19 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
         mobile = await screenshot_with_fallback(page, run_dir / "screenshots" / f"{stem}_mobile.png", 25000,
                                                 logger=logger, stage="mobile")
         shots["mobile"] = mobile
+        try:
+            metrics["site_checks"] = await run_site_checks(
+                page, final_url, observer, public_host_cache, public_host, image_loading)
+        except Exception as audit_error:
+            metrics["site_checks"] = {"status": "unknown",
+                                      "error": f"{type(audit_error).__name__}: {audit_error}"[:500]}
         signals = score_signals(metrics)
         return {"site_check_status": "loaded", "domain": final_host, "final_url": final_url,
                 "site_title": metrics.get("title", ""), "automated_priority": signals["automated_priority"],
                 "website_opportunity_score": signals["website_opportunity_score"],
                 "score_basis": signals["score_basis"], "signals": signals["signals"],
                 "evidence": metrics, "screenshots": shots, "evidence_confidence": signals["evidence_confidence"],
+                "site_checks": metrics.get("site_checks", {"status": "unknown"}),
                 "hermes_visual_review": "pending", "human_review": "pending"}
     except Exception as exc:
         if logger:
@@ -536,6 +550,8 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
                 "evidence": metrics, "screenshots": shots,
                 "evidence_confidence": "limited", "hermes_visual_review": "pending",
                 "human_review": "pending"}
+    finally:
+        observer.close()
 
 
 def query_is_complete(row: dict) -> bool:

@@ -139,6 +139,28 @@ def audit_run(run_dir: Path) -> dict:
     site_statuses = Counter(str(row.get("site_check_status") or "unknown") for row in candidates)
     human_reviews = Counter(review_status(row, "human_review") for row in candidates)
     hermes_reviews = Counter(review_status(row, "hermes_visual_review") for row in candidates)
+    audit_names = ("http_links_and_resources", "broken_images", "contact_form_privacy",
+                   "broken_links_and_interactions", "latest_blog_post", "content_freshness",
+                   "copyright_footer_signal", "legacy_twitter_branding")
+    site_audit_statuses: dict[str, Counter] = {name: Counter() for name in audit_names}
+    site_audit_candidates = 0
+    legacy_twitter_detected = 0
+    old_copyright_footer_detected = 0
+    for row in candidates:
+        checks = row.get("site_checks") or (row.get("evidence") or {}).get("site_checks") or {}
+        if not isinstance(checks, dict) or not checks:
+            for name in audit_names:
+                site_audit_statuses[name]["unknown"] += 1
+            continue
+        site_audit_candidates += 1
+        for name in audit_names:
+            value = checks.get(name)
+            status = str((value or {}).get("status") or "unknown") if isinstance(value, dict) else "unknown"
+            site_audit_statuses[name][status] += 1
+        if (checks.get("legacy_twitter_branding") or {}).get("legacy_twitter_logo_detected"):
+            legacy_twitter_detected += 1
+        if (checks.get("copyright_footer_signal") or {}).get("older_years"):
+            old_copyright_footer_detected += 1
     screenshot_paths = 0
     screenshots_present = 0
     for row in candidates:
@@ -180,6 +202,10 @@ def audit_run(run_dir: Path) -> dict:
         "results_site_assessed": site_assessed_count,
         "unique_candidate_domains": len(set(candidate_domains)),
         "candidate_site_statuses": dict(sorted(site_statuses.items())),
+        "site_audit_candidates": site_audit_candidates,
+        "site_audit_statuses": {name: dict(sorted(counts.items())) for name, counts in site_audit_statuses.items()},
+        "legacy_twitter_logo_candidates": legacy_twitter_detected,
+        "old_copyright_footer_candidates": old_copyright_footer_detected,
         "human_review_statuses": dict(sorted(human_reviews.items())),
         "hermes_visual_review_statuses": dict(sorted(hermes_reviews.items())),
         "candidate_screenshots_present": screenshots_present,
@@ -230,6 +256,24 @@ def summary_markdown(summary: dict) -> str:
     review_states = {f"Human: {key}": value for key, value in summary["human_review_statuses"].items()}
     review_states.update({f"Hermes visual: {key}": value for key, value in summary["hermes_visual_review_statuses"].items()})
     lines.extend(f"| {status} | {count} |" for status, count in sorted(review_states.items()))
+    lines.extend(["", "## Automated website checks", "",
+                  f"Structured site checks are available for {summary['site_audit_candidates']}/{summary['unique_candidate_domains']} candidates. Findings are evidence; they do not replace human visual review.",
+                  "", "| Check | Findings |", "|---|---:|"])
+    for name, counts in summary["site_audit_statuses"].items():
+        if name == "latest_blog_post":
+            finding = f"{counts.get('found', 0)} dated post(s) found; {counts.get('not_found', 0)} not found"
+        elif name == "content_freshness":
+            finding = (f"{counts.get('dated_content_found', 0)} dated-content clue(s); "
+                       f"{counts.get('weak_date_clue_only', 0)} weak-only; {counts.get('unknown', 0)} unknown")
+        elif name == "legacy_twitter_branding":
+            finding = f"{summary['legacy_twitter_logo_candidates']} possible legacy logo(s)"
+        elif name == "copyright_footer_signal":
+            finding = (f"{summary['old_copyright_footer_candidates']} possible stale footer(s); "
+                       "copyright years do not count as content freshness")
+        else:
+            finding = (f"{counts.get('issues_found', 0)} issue(s); "
+                       f"{counts.get('partial', 0)} partial; {counts.get('unknown', 0)} unknown")
+        lines.append(f"| {name} | {finding} |")
     for heading, records in (("Category totals", summary["by_category"]), ("City totals", summary["by_city"])):
         lines.extend(["", f"## {heading}", "", "| Input | Queries recorded | Results returned |", "|---|---:|---:|"])
         lines.extend(f"| {name} | {counts.get('queries', 0)} | {counts.get('returned', 0)} |" for name, counts in records.items())
