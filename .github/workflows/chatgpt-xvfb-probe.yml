@@ -1,12 +1,12 @@
-name: ChatGPT Xvfb one-shot search probe
+name: ChatGPT Xvfb runner check
 
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: "One prompt to submit to the public ChatGPT web experience"
+        description: "Prompt to submit using the git-inference ChatGPT response runner"
         required: true
-        default: "Find independently owned in-ground pool companies serving Indianapolis, Indiana. Search the web and return up to 10 businesses, each with its official website URL and a source citation supporting that it serves this area. If you cannot verify the official website or service area, say so. Do not invent businesses or URLs."
+        default: "Find independent kitchen remodelers serving Westminster, Colorado, with direct official website URLs and source URLs supporting service in the area. Do not invent businesses or URLs."
         type: string
 
 permissions:
@@ -19,34 +19,56 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.58.0-noble
+      options: --user root
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-
-      - name: Install Xvfb and Playwright Chromium
+      - name: Install pinned Python dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes xvfb
-          python -m pip install --disable-pip-version-check "playwright==1.58.0"
-          python -m playwright install --with-deps chromium
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m playwright install chromium
+          mkdir -p tmp
+          rm -rf tmp/chatgpt-probe-profile
 
-      - name: Submit one prompt to ChatGPT under Xvfb
+      - name: Submit prompt with the git-inference response runner under Xvfb
         id: probe
         env:
           CHATGPT_PROMPT: ${{ inputs.prompt }}
         run: |
           mkdir -p artifacts/chatgpt-xvfb-probe
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path("artifacts/chatgpt-xvfb-probe")
+          (root / "prompt.txt").write_text(os.environ["CHATGPT_PROMPT"] + "\n", encoding="utf-8")
+          (root / "instructions.txt").write_text(
+              "Use ChatGPT web search when the prompt asks for current local businesses. "
+              "Return the answer directly and do not invent URLs or evidence.\n",
+              encoding="utf-8",
+          )
+          PY
           set +e
-          xvfb-run --auto-servernum --server-args="-screen 0 1440x1000x24" \
-            python tools/chatgpt_xvfb_probe.py \
-              --prompt "$CHATGPT_PROMPT" \
-              --artifacts-dir artifacts/chatgpt-xvfb-probe
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            python tools/chatgpt_file_playwright_anonymous_ci.py \
+              --stage-name chatgpt_runner_check \
+              --input-file artifacts/chatgpt-xvfb-probe/prompt.txt \
+              --instructions-file artifacts/chatgpt-xvfb-probe/instructions.txt \
+              --output-file artifacts/chatgpt-xvfb-probe/response.md \
+              --metadata-output-file artifacts/chatgpt-xvfb-probe/metadata.json \
+              --success-screenshot artifacts/chatgpt-xvfb-probe/chatgpt-response.png \
+              --error-screenshot artifacts/chatgpt-xvfb-probe/chatgpt-error.png \
+              --user-data-dir tmp/chatgpt-probe-profile \
+              --allow-retry \
+              --refresh-before-retry \
+              --wait-seconds 70 \
+              --timeout-ms 120000 \
+              --post-response-wait-seconds 2 \
+              --response-settle-seconds 2 \
+              --max-settle-wait-seconds 30
           probe_rc=$?
           echo "exit_code=$probe_rc" >> "$GITHUB_OUTPUT"
           exit 0
@@ -63,5 +85,5 @@ jobs:
       - name: Report probe outcome
         if: always() && steps.probe.outputs.exit_code != '0'
         run: |
-          echo "ChatGPT probe returned ${{ steps.probe.outputs.exit_code }}. Review the uploaded status and screenshot."
+          echo "ChatGPT runner returned ${{ steps.probe.outputs.exit_code }}. Review the uploaded response and diagnostics."
           exit 1

@@ -9,7 +9,9 @@ import ipaddress
 import json
 import re
 import socket
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,7 +246,7 @@ def parse_search_results(items: list[dict]) -> list[dict]:
     return results
 
 
-def fingerprint(queries: list[dict], region: str, engine: str = "duckduckgo_html") -> str:
+def fingerprint(queries: list[dict], region: str, engine: str = "chatgpt_web_ui") -> str:
     payload = json.dumps({"queries": queries, "region": region, "engine": engine}, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -526,7 +528,327 @@ def save_run(run_dir: Path, queries: list[dict], records: dict[int, dict], candi
     return progress
 
 
+CHATGPT_INSTRUCTIONS = """You are researching local businesses for a human-reviewed website assessment.
+Use ChatGPT web search to identify independent local businesses that match the category and
+serve the specified location. Return direct official business website URLs, never directory,
+marketplace, social-media, or aggregator URLs. Include the source URLs that support the business
+identity, official website, and service area. Do not invent names, URLs, citations, or evidence.
+Return only one valid JSON object matching this schema:
+{"businesses":[{"business_name":"...","official_website_url":"https://...",
+"service_area_evidence":"...","source_urls":["https://..."]}],"limitations":"..."}
+If none can be verified, return {"businesses":[],"limitations":"..."}."""
+
+
+def build_chatgpt_prompt(query: dict, limit: int) -> str:
+    return (f"Find up to {limit} businesses for this search.\n"
+            f"Category: {query['category']}\nLocation: {query['location']}\n"
+            "Use web search and prefer independent businesses serving this exact area. "
+            "For every business, cite source URLs and explain the service-area evidence. "
+            "Return only the JSON object specified in the instructions.")
+
+
+def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
+                          result_limit: int) -> tuple[list[dict], dict]:
+    """Run the git-inference ChatGPT browser runner under the workflow's Xvfb display."""
+    index = int(query["query_index"])
+    query_dir = run_dir / "chatgpt" / f"query_{index:04d}"
+    query_dir.mkdir(parents=True, exist_ok=True)
+    prompt_file = query_dir / "prompt.txt"
+    prompt_file.write_text(build_chatgpt_prompt(query, result_limit) + "\n", encoding="utf-8")
+    instructions_file = query_dir / "instructions.txt"
+    instructions_file.write_text(CHATGPT_INSTRUCTIONS + "\n", encoding="utf-8")
+    runner = Path(__file__).resolve().with_name("chatgpt_file_playwright_anonymous_ci.py")
+    results: list[dict] = []
+    attempt_records = []
+    last_error = ""
+
+    for attempt in (1, 2):
+        attempt_dir = query_dir / f"attempt_{attempt:02d}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+        output_file = attempt_dir / "response.md"
+        parsed_file = attempt_dir / "response.json"
+        metadata_file = attempt_dir / "metadata.json"
+        screenshot_file = attempt_dir / "chatgpt-response.png"
+        error_screenshot = attempt_dir / "playwright-error.png"
+        error_html = attempt_dir / "playwright-error.html"
+        with tempfile.TemporaryDirectory(prefix=f"chatgpt-profile-{index:04d}-") as profile:
+            command = [
+                sys.executable, str(runner),
+                "--stage-name", f"lead_hunt_query_{index:04d}",
+                "--input-file", str(prompt_file),
+                "--instructions-file", str(instructions_file),
+                "--output-file", str(output_file),
+                "--parsed-output-file", str(parsed_file),
+                "--metadata-output-file", str(metadata_file),
+                "--expect-json", "--fail-if-invalid-json",
+                "--user-data-dir", profile,
+                "--allow-retry", "--refresh-before-retry",
+                "--wait-seconds", "70",
+                "--timeout-ms", "120000",
+                "--post-response-wait-seconds", "2",
+                "--response-settle-seconds", "2",
+                "--max-settle-wait-seconds", "30",
+                "--error-screenshot", str(error_screenshot),
+                "--success-screenshot", str(screenshot_file),
+            ]
+            if attempt > 1:
+                command.append("--refresh-before-send")
+            started = time.monotonic()
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=420)
+            duration_ms = round((time.monotonic() - started) * 1000)
+        attempt_record = {"attempt": attempt, "exit_code": completed.returncode,
+                          "duration_ms": duration_ms,
+                          "response_file": str(output_file.relative_to(run_dir)).replace("\\", "/"),
+                          "screenshot": str(screenshot_file.relative_to(run_dir)).replace("\\", "/")
+                          if screenshot_file.exists() else None,
+                          "error_screenshot": str(error_screenshot.relative_to(run_dir)).replace("\\", "/")
+                          if error_screenshot.exists() else None,
+                          "error_html": str(error_html.relative_to(run_dir)).replace("\\", "/")
+                          if error_html.exists() else None}
+        if completed.returncode == 0 and parsed_file.exists():
+            payload = json.loads(parsed_file.read_text(encoding="utf-8"))
+            businesses = payload.get("businesses", payload.get("results", payload.get("candidates", [])))
+            if not isinstance(businesses, list):
+                raise ValueError("ChatGPT JSON must contain a businesses array")
+            for item in businesses[:result_limit]:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("business_name") or item.get("name") or "").strip()[:300]
+                raw_url = str(item.get("official_website_url") or item.get("website_url") or item.get("url") or "").strip()
+                normalized = resolve_ddg_result(raw_url)
+                sources_value = item.get("source_urls") or item.get("sources") or []
+                if isinstance(sources_value, str):
+                    sources_value = [sources_value]
+                sources = []
+                if isinstance(sources_value, list):
+                    for value in sources_value:
+                        source_url = str(value.get("url") or value.get("source_url") or "").strip() if isinstance(value, dict) else str(value).strip()
+                        if source_url:
+                            sources.append(source_url)
+                name = name or normalized.get("domain", "")
+                results.append({
+                    "position": len(results) + 1,
+                    "title": name,
+                    "snippet": str(item.get("service_area_evidence") or item.get("evidence") or "").strip()[:1200],
+                    "raw_url": raw_url,
+                    "url": normalized.get("url"),
+                    "domain": normalized.get("domain", ""),
+                    "source_urls": sources,
+                    "service_area_evidence": str(item.get("service_area_evidence") or item.get("evidence") or "").strip()[:1200],
+                    "result_disposition": None,
+                    "disposition_reason": None,
+                })
+            attempt_record["parsed_business_count"] = len(results)
+            attempt_records.append(attempt_record)
+            logger.emit("chatgpt_discovery_completed", query_index=index, attempt=attempt,
+                        candidate_count=len(results), duration_ms=duration_ms,
+                        response_file=attempt_record["response_file"], screenshot=attempt_record["screenshot"])
+            metadata = json.loads(metadata_file.read_text(encoding="utf-8")) if metadata_file.exists() else {}
+                    return results, {"attempt_history": attempt_records, "attempt": attempt,
+                             "prompt_file": str(prompt_file.relative_to(run_dir)).replace("\\", "/"),
+                             "instructions_file": str(instructions_file.relative_to(run_dir)).replace("\\", "/"),
+                             "response_file": attempt_record["response_file"],
+                             "response_json_file": str(parsed_file.relative_to(run_dir)).replace("\\", "/"),
+                             "response_screenshot": attempt_record["screenshot"],
+                             "runner_metadata_file": str(metadata_file.relative_to(run_dir)).replace("\\", "/"),
+                             "runner_metadata": metadata,
+                             "chatgpt_limitations": str(payload.get("limitations") or "")[:1200]}
+        last_error = ((completed.stderr or completed.stdout or f"runner exit code {completed.returncode}").strip())[-2000:]
+        attempt_record["error"] = last_error
+        attempt_records.append(attempt_record)
+        logger.emit("chatgpt_discovery_attempt_failed", query_index=index, attempt=attempt,
+                    exit_code=completed.returncode, duration_ms=duration_ms, error=last_error[:500],
+                    error_screenshot=attempt_record["error_screenshot"])
+
+    raise RuntimeError(json.dumps({"error": last_error, "attempt_history": attempt_records}, ensure_ascii=False))
+
+
+async def run_chatgpt_batch(args: argparse.Namespace) -> int:
+    from playwright.async_api import async_playwright
+
+    run_dir = args.state_dir.resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    queries = build_queries(args.categories, args.locations, args.region)
+    if len(queries) > 200:
+        raise ValueError("Maximum configured batch is 200 category/location queries")
+    if not 1 <= args.max_queries <= 20:
+        raise ValueError("max-queries must be between 1 and 20")
+    if not 1 <= args.max_sites_per_query <= 8:
+        raise ValueError("max-sites-per-query must be between 1 and 8")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", run_dir.name):
+        raise ValueError("state-dir folder name must be a safe run key (letters, digits, dot, underscore, hyphen)")
+    manifest_path = run_dir / "RUN_MANIFEST.json"
+    manifest = {"run_key": run_dir.name, "region": args.region, "engine": "chatgpt_web_ui",
+                "categories": split_values(args.categories), "locations": split_values(args.locations),
+                "configured_queries": len(queries), "input_fingerprint": fingerprint(queries, args.region, "chatgpt_web_ui"),
+                "workflow": "GitHub Actions Playwright headed Chromium under Xvfb; git-inference ChatGPT response runner",
+                "created_at": now_iso(), "updated_at": now_iso(), "automated_scoring_is_final": False,
+                "review_policy": "ChatGPT discovery evidence, direct-site signals, Hermes visual review, and human decisions remain separate"}
+    if manifest_path.exists():
+        prior = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        if prior.get("input_fingerprint") != manifest["input_fingerprint"]:
+            raise ValueError("This run key already contains different categories/locations/region; choose a new run key")
+        manifest = {**prior, "updated_at": now_iso()}
+    logger = BehaviorLogger(run_dir / "BEHAVIOR_LOG.jsonl")
+    records = {int(row["query_index"]): row for row in read_jsonl(run_dir / "QUERY_LEDGER.jsonl")
+               if row.get("query_index") is not None}
+    candidates = read_jsonl(run_dir / "CANDIDATE_LEDGER.jsonl")
+    candidate_by_domain = {row.get("domain", "").lower(): row for row in candidates if row.get("domain")}
+    exclusions = set()
+    exclusion_path = Path(__file__).resolve().parents[1] / "config" / "excluded_domains.txt"
+    if exclusion_path.exists():
+        exclusions = {line.strip().lower().removeprefix("www.") for line in exclusion_path.read_text(encoding="utf-8").splitlines()
+                      if line.strip() and not line.strip().startswith("#")}
+    public_host_cache: dict[str, bool] = {}
+    pending = [query for query in queries if not query_is_complete(records.get(query["query_index"], {}))]
+    batch = pending[:args.max_queries]
+    logger.emit("batch_configuration", configured_query_count=len(queries), pending_query_count=len(pending),
+                selected_query_count=len(batch), max_queries=args.max_queries,
+                max_sites_per_query=args.max_sites_per_query, search_engine="chatgpt_web_ui",
+                browser_runner="git-inference ChatGPT Playwright runner", display="Xvfb")
+    if not batch:
+        progress = save_run(run_dir, queries, records, candidates, manifest)
+        logger.emit("batch_no_pending_queries")
+        logger.close()
+        print(json.dumps(progress, indent=2))
+        return 0
+
+    blocked = False
+    try:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=False)
+            context = await browser.new_context(viewport={"width": 1440, "height": 1000}, locale="en-US")
+
+            async def guard_local_navigation(route):
+                request = route.request
+                if not request.is_navigation_request():
+                    await route.continue_()
+                    return
+                host = host_of(request.url)
+                if host not in public_host_cache:
+                    public_host_cache[host] = await asyncio.to_thread(public_host, host)
+                if public_host_cache[host]:
+                    await route.continue_()
+                else:
+                    await route.abort("blockedbyclient")
+
+            await context.route("**/*", guard_local_navigation)
+            page = await context.new_page()
+            logger.emit("browser_ready", browser="playwright_chromium_headed", display="xvfb",
+                        site_navigation="direct URL after ChatGPT extraction", result_link_clicks=0)
+            for query in batch:
+                idx = query["query_index"]
+                row = {"query_index": idx, **query, "search_engine": "chatgpt_web_ui",
+                       "terminal_status": "in_progress", "organic_results_returned_count": 0,
+                       "organic_results_inspected_count": 0, "organic_results": [],
+                       "started_at": now_iso(), "timestamp": now_iso()}
+                records[idx] = row
+                save_run(run_dir, queries, records, candidates, manifest)
+                logger.emit("chatgpt_discovery_started", query_index=idx, category=query["category"], location=query["location"])
+                try:
+                    results, chatgpt_evidence = await asyncio.to_thread(
+                        run_chatgpt_discovery, query, run_dir, logger, max(args.max_sites_per_query * 2, 10))
+                    row.update(chatgpt_evidence)
+                    row["organic_results_returned_count"] = len(results)
+                    if not results:
+                        row.update({"terminal_status": "no_results", "finished_at": now_iso(),
+                                    "error": "ChatGPT returned valid JSON without any business URLs"})
+                        records[idx] = row
+                        save_run(run_dir, queries, records, candidates, manifest)
+                        continue
+                    dispositions = [classify_result(result, exclusions)[0] for result in results]
+                    logger.emit("chatgpt_results_extracted", query_index=idx, result_count=len(results),
+                                excluded_count=dispositions.count("directory_or_lead_generation"),
+                                eligible_count=dispositions.count("eligible_for_site_check"),
+                                site_visit_cap=args.max_sites_per_query)
+                    inspected = 0
+                    eligible_sites = 0
+                    for result in results:
+                        disposition, reason_text = classify_result(result, exclusions)
+                        result["result_disposition"] = disposition
+                        result["disposition_reason"] = reason_text
+                        logger.emit("chatgpt_result_classified", query_index=idx,
+                                    result_position=result["position"], domain=result.get("domain"), disposition=disposition)
+                        if disposition != "eligible_for_site_check" or eligible_sites >= args.max_sites_per_query:
+                            if disposition == "eligible_for_site_check":
+                                result["result_disposition"] = "eligible_not_visited_limit"
+                                result["disposition_reason"] = f"Per-query site-check limit ({args.max_sites_per_query}) reached"
+                            inspected += 1
+                            row.update({"organic_results": results, "organic_results_inspected_count": inspected,
+                                        "updated_at": now_iso()})
+                            records[idx] = row
+                            save_run(run_dir, queries, records, candidates, manifest)
+                            continue
+                        host = result["domain"]
+                        if host in candidate_by_domain:
+                            result["result_disposition"] = "duplicate_domain"
+                            result["disposition_reason"] = "This domain was already assessed earlier in the run"
+                            result["candidate_domain"] = host
+                        else:
+                            eligible_sites += 1
+                            site = await assess_site(page, result, query, run_dir, public_host_cache, logger)
+                            if site.get("domain") and site["domain"] in candidate_by_domain:
+                                result["result_disposition"] = "duplicate_domain"
+                                result["disposition_reason"] = "Redirected to a domain already assessed earlier in the run"
+                                result["candidate_domain"] = site["domain"]
+                            elif site.get("site_check_status") in {"redirected_to_excluded_host", "redirected_to_non_public_host", "blocked_non_public_host"}:
+                                result["result_disposition"] = site["site_check_status"]
+                                result["disposition_reason"] = site.get("reason", "Destination excluded")
+                            else:
+                                candidate = {"candidate_id": f"{idx:04d}-{slugify(site.get('domain') or host)}",
+                                             "source_query_index": idx, "category": query["category"],
+                                             "configured_location": query["location"], "region": args.region,
+                                             "business_name": result["title"], "domain": site.get("domain", host),
+                                             "canonical_url": f"{urlsplit(site.get('final_url') or result['url']).scheme or 'https'}://{site.get('domain', host)}",
+                                             "source_result_url": (result.get("source_urls") or [result["raw_url"]])[0],
+                                             "source_result_title": result["title"],
+                                             "source_result_snippet": result["snippet"], "source_result_position": result["position"],
+                                             "chatgpt_source_urls": result.get("source_urls", []),
+                                             "chatgpt_official_website_url": result.get("raw_url", ""),
+                                             "chatgpt_service_area_evidence": result.get("service_area_evidence", ""),
+                                             "discovery_method": "chatgpt_web_ui", **site,
+                                             "market_evidence": "pending_review", "human_review": "pending",
+                                             "hermes_visual_review": "pending", "recorded_at": now_iso()}
+                                candidates.append(candidate)
+                                candidate_by_domain[candidate["domain"].lower()] = candidate
+                                result["candidate_domain"] = candidate["domain"]
+                                result["result_disposition"] = "site_assessed"
+                                result["disposition_reason"] = "ChatGPT discovery followed by direct-site assessment; market fit and final verdict remain pending"
+                        inspected += 1
+                        row.update({"organic_results": results, "organic_results_inspected_count": inspected,
+                                    "updated_at": now_iso()})
+                        records[idx] = row
+                        save_run(run_dir, queries, records, candidates, manifest)
+                    row.update({"terminal_status": "success", "finished_at": now_iso(),
+                                "organic_results": results, "organic_results_inspected_count": inspected})
+                    records[idx] = row
+                    save_run(run_dir, queries, records, candidates, manifest)
+                    logger.emit("chatgpt_query_completed", query_index=idx, result_count=len(results),
+                                direct_sites_checked=eligible_sites, status="success")
+                except Exception as exc:
+                    logger.emit("chatgpt_query_failed", query_index=idx, exception_type=type(exc).__name__)
+                    row.update({"terminal_status": "error", "finished_at": now_iso(),
+                                "error": f"{type(exc).__name__}: {exc}"[:2500]})
+                    records[idx] = row
+                    save_run(run_dir, queries, records, candidates, manifest)
+                    print(f"ChatGPT query {idx} failed: {row['error']}", file=sys.stderr, flush=True)
+            await context.close()
+            await browser.close()
+    finally:
+        logger.close()
+
+    progress = save_run(run_dir, queries, records, candidates, manifest, blocked=blocked)
+    print(json.dumps(progress, indent=2))
+    return 1 if any(records.get(q["query_index"], {}).get("terminal_status") in {"error", "no_results"} for q in batch) else 0
+
+
 async def run_batch(args: argparse.Namespace) -> int:
+    if args.engine == "chatgpt":
+        return await run_chatgpt_batch(args)
+    return await run_duckduckgo_batch(args)
+
+
+async def run_duckduckgo_batch(args: argparse.Namespace) -> int:
     from playwright.async_api import async_playwright
 
     run_dir = args.state_dir.resolve()
@@ -545,7 +867,7 @@ async def run_batch(args: argparse.Namespace) -> int:
         raise ValueError("max-sites-per-query must be between 1 and 8")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", run_dir.name):
         raise ValueError("state-dir folder name must be a safe run key (letters, digits, dot, underscore, hyphen)")
-    input_hash = fingerprint(queries, args.region)
+    input_hash = fingerprint(queries, args.region, "duckduckgo_html")
     manifest_path = run_dir / "RUN_MANIFEST.json"
     manifest = {"run_key": run_dir.name, "region": args.region, "engine": "duckduckgo_html",
                 "search_url": DDG_SEARCH_URL, "categories": categories, "locations": locations,
@@ -757,6 +1079,8 @@ async def run_batch(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--engine", choices=("chatgpt", "duckduckgo"), default="chatgpt",
+                        help="Discovery source (ChatGPT browser is the default)")
     parser.add_argument("--categories", required=True, help="One category per line")
     parser.add_argument("--locations", required=True, help="One named location per line")
     parser.add_argument("--region", required=True)

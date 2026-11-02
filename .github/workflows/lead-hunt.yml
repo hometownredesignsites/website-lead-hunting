@@ -1,4 +1,4 @@
-name: Website lead hunt
+name: ChatGPT website lead hunt
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       run_key:
         description: "Stable run folder key; reuse it to continue the same saved run"
         required: true
-        default: "denver-kitchen-ddg"
+        default: "westminster-kitchen-chatgpt"
         type: string
       categories:
         description: "Business categories, one per line"
@@ -16,12 +16,12 @@ on:
       locations:
         description: "Named locations, one per line"
         required: true
-        default: "Denver, CO"
+        default: "Westminster, CO"
         type: string
       region:
         description: "Human-readable target region"
         required: true
-        default: "Denver metro, Colorado"
+        default: "Westminster, Colorado"
         type: string
       max_queries:
         description: "Pending queries to process in this batch (1-20)"
@@ -51,35 +51,31 @@ permissions:
   contents: write
 
 concurrency:
-  group: website-lead-hunt-main-writer
+  group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   hunt:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 360
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.58.0-noble
+      options: --user root
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-
-      - name: Install browser dependencies
+      - name: Install pinned Python dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes xvfb
           python -m pip install --disable-pip-version-check -r requirements.txt
-          python -m playwright install --with-deps chromium
+          python -m playwright install chromium
 
       - name: Run offline regression checks
         run: python -m unittest discover -s tests -v
 
-      - name: Run bounded DDG search and website assessment batch
+      - name: Run bounded ChatGPT research and website assessment batch
         id: scan
         shell: bash
         env:
@@ -97,8 +93,9 @@ jobs:
           fi
           mkdir -p runs
           set +e
-          xvfb-run --auto-servernum --server-args="-screen 0 1440x1000x24" \
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python tools/lead_hunt.py \
+              --engine chatgpt \
               --categories "$CATEGORIES" \
               --locations "$LOCATIONS" \
               --region "$REGION" \
@@ -115,6 +112,7 @@ jobs:
         env:
           RUN_KEY: ${{ inputs.run_key }}
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || [[ ! -d "runs/$RUN_KEY" ]]; then
             echo "No safe run directory to commit."
             exit 0

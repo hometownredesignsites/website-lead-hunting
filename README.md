@@ -1,85 +1,50 @@
-# DuckDuckGo Xvfb Search Probe
+# ChatGPT Website Lead Hunting
 
-A small GitHub Actions probe for checking whether DuckDuckGo returns extractable search results from headed Chromium running under Xvfb on a GitHub-hosted Ubuntu runner.
+This repository runs local-business discovery and website review in GitHub Actions. The discovery step asks ChatGPT through the same headed Playwright/Xvfb runner used by `benspilker/git-inference`; the site-review step checks candidate websites directly and captures desktop and mobile screenshots.
 
-The default query is `in-ground pool companies Indianapolis, IN`. Dispatch the workflow manually to use it or enter another single query.
+## Start or continue a run
 
-## What it does
+1. Open **Actions → ChatGPT website lead hunt → Run workflow**.
+2. Set a stable `run_key`, categories and named locations (one per line), and the batch/site limits.
+3. Use the same key and inputs to resume. A changed category/location/region set requires a new key.
+4. The workflow processes up to 20 pending category/location prompts in a run, and checks up to 8 direct business websites per prompt. The default batch is smaller to keep runs manageable.
+5. The Action commits the run folder to the selected branch and also uploads a seven-day backup artifact.
 
-1. Starts Xvfb with a 1440×1000 display.
-2. Launches Chromium in headed mode through Playwright.
-3. Opens DuckDuckGo once and records the response status, final URL, visible result selectors, and up to five sample organic results.
-4. Saves a full-page screenshot and JSON summary as a 7-day GitHub Actions artifact.
-5. Stops without interacting if a challenge page is detected.
+The default inputs target kitchen remodelers in Westminster, Colorado.
 
-The probe does not open result websites, solve challenges, or disguise browser identity. A successful search confirms that the runner can retrieve and parse one DuckDuckGo results page; it does not validate businesses or establish a complete lead-hunting pipeline.
+## ChatGPT browser runner
 
-## Run it
+The production workflow runs the ChatGPT UI with headed Chromium under Xvfb using `xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24'`. It uses `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules from the successful `git-inference` ChatGPT pipeline (source revision `1b5654d8ff4cbd4e8d870a27eb44af878520ecf5`). The response wait, settle, and retry behavior stays in that runner; the lead-hunt code calls it as a child process and consumes its validated JSON response.
 
-1. Open **Actions** in the repository.
-2. Select **DuckDuckGo Xvfb search probe**.
-3. Select **Run workflow**, optionally edit the query, and start the run.
-4. Download the run artifact to inspect `duckduckgo-result.json` and `duckduckgo-page.png`.
+Each query has two outer attempts, and the runner itself can retry a failed send after refreshing the chat. Successful response text, parsed JSON, runner metadata, and a full-page ChatGPT screenshot are saved in `runs/<run_key>/chatgpt/query_NNNN/`. Failure screenshots and HTML diagnostics are retained there too. The temporary browser profile is deleted after each attempt and is never committed.
 
-The expected successful status is `results_found`. The workflow fails when the probe returns a challenge, extracts no results, or encounters an error; artifacts are uploaded whenever possible.
+The prompt requests independent local businesses with direct official website URLs, supporting source URLs, and service-area evidence. Invalid JSON or an empty response leaves the query pending for a later resume. The workflow records failures and screenshots rather than attempting CAPTCHA handling.
 
-## One-shot ChatGPT web-search probe
+## Run outputs
 
-The **ChatGPT Xvfb one-shot search probe** workflow submits one prompt to the public `chatgpt.com` experience in headed Chromium under Xvfb. It records whether the page accepts the prompt, saves the answer and source links, and uploads a screenshot plus JSON summary as a seven-day artifact. It does not sign in, retry, or interact with a challenge. The default prompt requests independently owned in-ground pool companies serving Indianapolis, Indiana.
+Each `runs/<run_key>/` folder contains:
 
-This is a one-shot UI feasibility check, not a structured search API or an exhaustive lead-discovery run. A successful answer should be checked against its cited sources before using the URLs as pipeline input.
+- `RUN_MANIFEST.json` — the input fingerprint, engine, and review policy.
+- `QUERY_LEDGER.jsonl` — per-query prompt, response paths, sources, status, results, and dispositions.
+- `CANDIDATE_LEDGER.jsonl` — unique candidate websites, direct-site evidence, screenshots, and pending review fields.
+- `LOCATION_CATEGORY_PROGRESS.json` — batch progress and terminal status.
+- `BEHAVIOR_LOG.jsonl` — chronological query, browser, retry, and site-review events.
+- `chatgpt/` — prompts, instructions, raw responses, parsed JSON, runner metadata, screenshots, and error diagnostics.
+- `screenshots/` — desktop and mobile screenshots of candidate websites.
 
-## Local use
+ChatGPT discovery is not treated as proof of official-site ownership or service-area fit. The workflow filters known directories and aggregators, checks the candidate URL and redirects against public-address rules, visits eligible official sites directly, and keeps both Hermes visual review and human review pending.
 
-Requires Python 3.11+, Playwright, Chromium, and Xvfb:
+## ChatGPT runner check
 
-```bash
-python -m pip install "playwright==1.58.0"
-python -m playwright install chromium
-xvfb-run --auto-servernum --server-args="-screen 0 1440x1000x24" \
-  python tools/search_engine_xvfb_probe.py \
-    --engine duckduckgo \
-    --query "in-ground pool companies Indianapolis, IN" \
-    --artifacts-dir artifacts/duckduckgo-xvfb-probe
-```
+**Actions → ChatGPT Xvfb runner check** sends a one-off prompt through the same runner used by lead hunting. It uploads the answer, metadata, success screenshot, and failure diagnostics as a seven-day artifact; it does not commit those probe files to a run folder.
 
-## Resumable website lead-hunt pipeline
+## Screenshot retention
 
-The `Website lead hunt` GitHub Actions workflow runs a bounded DDG search batch in headed Chromium under Xvfb, performs first-pass result classification, visits eligible public business websites, captures desktop and mobile screenshots, records observable technical signals, and commits the run folder back to the selected branch. It does not ask a vision model to make the final redesign decision.
+Screenshots are committed with the ledgers so the evidence stays with the run. Git history will grow as runs accumulate. Keep these outputs free of secrets and personal session data; the ChatGPT browser profile is temporary and excluded from the saved run.
 
-### Start or continue a run
-
-1. Open **Actions → Website lead hunt → Run workflow**.
-2. Set a stable `run_key`, category and location lists (one per line), and the batch/site limits.
-3. The workflow stores the run at `runs/<run_key>/`. Reusing that key with the same category and location inputs resumes pending queries and preserves completed query evidence. Use a new key when changing inputs; a mismatched fingerprint is rejected.
-4. The workflow commits JSONL ledgers and screenshots to the branch that was selected when dispatching. A seven-day artifact is also uploaded as a backup.
-
-Each search is capped to 20 queries per invocation and 8 direct-site checks per query. It stops if DDG presents a challenge. Sponsored results, known directories/lead-generation sites, social/video pages, and common editorial/listicle results are recorded with a disposition and are not visited as business sites. Domain exclusions are maintained in `config/excluded_domains.txt`.
-
-Every invocation appends `BEHAVIOR_LOG.jsonl` to the run folder. It records ordered timestamps for DDG request/response activity and status codes, search navigation, visible challenge evidence, result classification totals, direct-site navigation, inter-query waits, and screenshot retries. Network observations are restricted to DuckDuckGo host/path metadata; query parameters, request headers, cookies, and response bodies are not logged. This can establish the activity and response immediately preceding a challenge, but DuckDuckGo does not expose its internal challenge decision, so the log cannot prove which provider-side signal caused it. The runner stops without retrying a challenged query.
-
-The machine-generated `automated_priority` is based only on captured technical signals. `hermes_visual_review` and `human_review` remain pending; search rank, website metrics, and screenshots do not prove that a company is active, local, or a good sales prospect. Review candidate identity and market fit separately, then run Hermes locally against the saved desktop screenshots:
-
-```bash
-python tools/complete_visual_reviews.py --run-dir runs/<run_key>
-```
-
-Hermes writes its visual assessment into `HERMES_VISUAL_REVIEW_LEDGER.jsonl` and each candidate row. Its `visual_priority` is kept separate from the human decision. The mobile screenshot is evidence for a person to inspect; the Hermes prompt is explicitly limited to the desktop screenshot and does not infer mobile behavior.
-
-### Screenshot retention
-
-Keep the screenshots until every screenshot-bearing candidate has an `assessed` Hermes review. From a local checkout, first preview the number of files to remove, then apply the purge:
-
-```bash
-python tools/purge_screenshots.py --run-key <run_key>
-python tools/purge_screenshots.py --run-key <run_key> --apply
-```
-
-Commit the deletion and updated manifest. If repository storage warrants removing those image blobs from Git history too, the separate `--rewrite-history` option requires the exact repo/run confirmation string, a clean committed `main` checkout, installed `git-filter-repo`, and no remaining screenshots. It rewrites local history and force-pushes `main`; coordinate that disruptive operation with other collaborators. Do not run it until the review and purge commit are complete.
-
-### Local checks
+## Local checks
 
 ```bash
 python -m unittest discover -s tests -v
-python -m py_compile tools/lead_hunt.py tools/complete_visual_reviews.py tools/purge_screenshots.py
+python -m py_compile tools/lead_hunt.py tools/chatgpt_file_playwright_anonymous_ci.py
 ```
