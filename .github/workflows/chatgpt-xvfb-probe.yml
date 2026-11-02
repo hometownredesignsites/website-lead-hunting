@@ -13,6 +13,21 @@ on:
         required: true
         default: false
         type: boolean
+      review_saved_candidate:
+        description: "Score a saved candidate's real desktop and mobile website screenshots"
+        required: true
+        default: false
+        type: boolean
+      review_run_key:
+        description: "Existing runs/<run_key> folder containing the candidate and screenshots"
+        required: true
+        default: "westminster-kitchen-selector-test-20261101"
+        type: string
+      review_candidate_id:
+        description: "Candidate ID from that run's CANDIDATE_LEDGER.jsonl"
+        required: true
+        default: "0001-kakitchenremodelsandmore_com"
+        type: string
 
 permissions:
   contents: read
@@ -45,25 +60,49 @@ jobs:
           python tools/create_chatgpt_image_probe.py \
             --output artifacts/chatgpt-xvfb-probe/image-probe.png
 
+      - name: Prepare saved candidate screenshots for visual review
+        if: inputs.review_saved_candidate
+        env:
+          REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
+          REVIEW_CANDIDATE_ID: ${{ inputs.review_candidate_id }}
+        run: |
+          if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+            echo "review_run_key contains invalid characters" >&2
+            exit 1
+          fi
+          python tools/prepare_chatgpt_visual_review.py \
+            --run-dir "runs/$REVIEW_RUN_KEY" \
+            --candidate-id "$REVIEW_CANDIDATE_ID" \
+            --output-dir artifacts/chatgpt-xvfb-probe/website-review
+
       - name: Submit prompt with the ChatGPT runner under Xvfb
         id: probe
         shell: bash
         env:
           CHATGPT_PROMPT: ${{ inputs.prompt }}
           ATTACH_TEST_IMAGE: ${{ inputs.attach_test_image }}
+          REVIEW_SAVED_CANDIDATE: ${{ inputs.review_saved_candidate }}
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
           root = Path("artifacts/chatgpt-xvfb-probe")
           attach_image = os.environ["ATTACH_TEST_IMAGE"].lower() == "true"
+          review_candidate = os.environ["REVIEW_SAVED_CANDIDATE"].lower() == "true"
+          if attach_image and review_candidate:
+              raise SystemExit("Choose either Attach test image or Review saved candidate")
+          review_dir = root / "website-review"
           prompt = (
+              (review_dir / "prompt.txt").read_text(encoding="utf-8").strip()
+              if review_candidate else
               "Inspect the attached screenshot and return exactly this JSON: "
               "{\"visible_code\":\"...\",\"circle_color\":\"...\"}. "
               "If you cannot access the image, return {\"error\":\"image_not_accessible\"}. Do not guess."
               if attach_image else os.environ["CHATGPT_PROMPT"]
           )
           instructions = (
+              (review_dir / "instructions.txt").read_text(encoding="utf-8").strip()
+              if review_candidate else
               "Read the attached screenshot. Answer only from visible image content."
               if attach_image else
               "Use ChatGPT web search when the prompt asks for current local businesses. "
@@ -75,6 +114,13 @@ jobs:
           image_args=()
           if [[ "$ATTACH_TEST_IMAGE" == "true" ]]; then
             image_args+=(--image-file artifacts/chatgpt-xvfb-probe/image-probe.png)
+          elif [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
+            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop.png)
+            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile.png)
+          fi
+          context_args=()
+          if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
+            context_args+=(--context-file artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json)
           fi
           set +e
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
@@ -82,6 +128,7 @@ jobs:
               --stage-name chatgpt_runner_check \
               --input-file artifacts/chatgpt-xvfb-probe/prompt.txt \
               --instructions-file artifacts/chatgpt-xvfb-probe/instructions.txt \
+              "${context_args[@]}" \
               --output-file artifacts/chatgpt-xvfb-probe/response.md \
               --metadata-output-file artifacts/chatgpt-xvfb-probe/metadata.json \
               --success-screenshot artifacts/chatgpt-xvfb-probe/chatgpt-response.png \
@@ -101,6 +148,12 @@ jobs:
               --response artifacts/chatgpt-xvfb-probe/response.md \
               --metadata artifacts/chatgpt-xvfb-probe/metadata.json \
               --output artifacts/chatgpt-xvfb-probe/probe-result.json || probe_rc=$?
+          elif [[ "$probe_rc" -eq 0 && "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
+            python tools/validate_chatgpt_visual_review.py \
+              --response artifacts/chatgpt-xvfb-probe/response.md \
+              --metadata artifacts/chatgpt-xvfb-probe/metadata.json \
+              --context artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json \
+              --output artifacts/chatgpt-xvfb-probe/website-review/review-result.json || probe_rc=$?
           fi
           echo "exit_code=$probe_rc" >> "$GITHUB_OUTPUT"
           exit 0
@@ -117,5 +170,5 @@ jobs:
       - name: Report probe outcome
         if: always() && steps.probe.outputs.exit_code != '0'
         run: |
-          echo "ChatGPT runner or image-recognition check failed. Review the uploaded response and diagnostics."
+          echo "ChatGPT runner, image-recognition, or visual-review check failed. Review the uploaded response and diagnostics."
           exit 1

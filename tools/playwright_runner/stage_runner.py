@@ -8,7 +8,7 @@ from .browser_session import (
     assistant_turns,
     find_chat_composer,
     send_prompt,
-    attach_image_file,
+    attach_image_files,
     stabilize_response,
     wait_for_valid_response,
 )
@@ -29,7 +29,7 @@ def run_stage_once(
     refresh_before_retry: bool = False,
     stage_name: str = "generic",
     error_screenshot: Path | None = None,
-    image_file: Path | None = None,
+    image_files: list[Path] | None = None,
 ) -> tuple[str, dict]:
     metadata = {
         "attempt": 1,
@@ -41,6 +41,7 @@ def run_stage_once(
         "failure_reason": None,
         "attempt_failures": [],
         "image_attachment": None,
+        "image_attachments": [],
     }
     start = time.time()
 
@@ -78,8 +79,10 @@ def run_stage_once(
         composer = find_chat_composer(page, timeout_ms=timeout_ms)
         if composer is None:
             raise RuntimeError("Could not find composer for stage execution.")
-        if image_file is not None:
-            metadata["image_attachment"] = attach_image_file(page, image_file, timeout_ms=timeout_ms)
+        if image_files:
+            metadata["image_attachments"] = attach_image_files(page, image_files, timeout_ms=timeout_ms)
+            if len(metadata["image_attachments"]) == 1:
+                metadata["image_attachment"] = metadata["image_attachments"][0]
         assistant_messages = assistant_turns(page)
         before_count = assistant_messages.count()
         before_last_text = ""

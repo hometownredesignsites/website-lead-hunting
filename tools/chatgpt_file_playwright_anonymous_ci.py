@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--network-log-file", default="chatgpt_network.log")
     parser.add_argument("--error-screenshot", default="chatgpt_playwright_error.png")
     parser.add_argument("--success-screenshot", help="Save a full-page screenshot after a valid response")
-    parser.add_argument("--image-file", help="Optional local image to attach to this one ChatGPT message")
+    parser.add_argument("--image-file", action="append", help="Optional local image to attach to this one ChatGPT message; may be repeated")
     parser.add_argument("--chunks", type=int, default=1)
     parser.add_argument("--chunk-mode", choices=["none", "map_reduce", "finalize_on_last_chunk", "legacy"], default="none")
     return parser.parse_args()
@@ -79,7 +79,7 @@ def run() -> int:
     network_log_file = Path(args.network_log_file).expanduser().resolve()
     error_screenshot = Path(args.error_screenshot).expanduser().resolve() if args.error_screenshot else None
     success_screenshot = Path(args.success_screenshot).expanduser().resolve() if args.success_screenshot else None
-    image_file = Path(args.image_file).expanduser().resolve() if args.image_file else None
+    image_files = [Path(path).expanduser().resolve() for path in (args.image_file or [])]
 
     omit_sections = [s.strip() for s in args.omit_sections.split(",") if s.strip()]
     input_text, instructions_text = build_prompt_text(input_file, instructions_file=instructions_file, omit_sections=omit_sections)
@@ -146,7 +146,7 @@ def run() -> int:
                     refresh_before_retry=args.refresh_before_retry,
                     stage_name=args.stage_name,
                     error_screenshot=error_screenshot,
-                    image_file=image_file,
+                    image_files=image_files,
                 )
                 run_metadata["page_refreshed"] = bool(run_metadata.get("page_refreshed")) or bool(args.refresh_before_send)
                 run_metadata["thread_reused"] = not started_new_chat

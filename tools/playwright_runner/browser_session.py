@@ -177,13 +177,16 @@ def set_composer_text(composer, text: str) -> None:
     )
 
 
-def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
-    """Attach one local image through ChatGPT's visible composer file input."""
-    image_path = image_path.expanduser().resolve()
-    if not image_path.is_file():
-        raise FileNotFoundError(f"Image attachment does not exist: {image_path}")
-    if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
-        raise ValueError("ChatGPT image probe accepts PNG, JPEG, or WebP files")
+def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -> list[dict]:
+    """Attach one or more local images through ChatGPT's visible composer file input."""
+    image_paths = [path.expanduser().resolve() for path in image_paths]
+    if not image_paths:
+        return []
+    for image_path in image_paths:
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Image attachment does not exist: {image_path}")
+        if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise ValueError("ChatGPT image attachments must be PNG, JPEG, or WebP files")
 
     file_inputs = page.locator("input[type='file']")
     if file_inputs.count() == 0:
@@ -214,9 +217,9 @@ def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
         raise RuntimeError("ChatGPT did not expose a file input after opening the attachment menu")
     input_count = file_inputs.count()
     selected = file_inputs.nth(input_count - 1)
-    selected.set_input_files(str(image_path), timeout=timeout_ms)
+    selected.set_input_files([str(image_path) for image_path in image_paths], timeout=timeout_ms)
     deadline = time.time() + max(1, timeout_ms / 1000)
-    uploaded: dict | None = None
+    uploaded: list[dict] = []
     while time.time() < deadline:
         try:
             attachment_inputs = page.locator("input[name='imageAttachments']")
@@ -226,20 +229,28 @@ def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
                 attachments = json.loads(raw_attachments or "[]")
                 pending = (json.loads(pending_inputs.first.evaluate("el => el.value") or "[]")
                            if pending_inputs.count() else [])
-                uploaded = next((item for item in attachments
-                                 if isinstance(item, dict) and item.get("name") == image_path.name), None)
-                if uploaded and not pending:
+                uploaded_by_name = {item.get("name"): item for item in attachments
+                                    if isinstance(item, dict)}
+                uploaded = [uploaded_by_name[path.name] for path in image_paths
+                            if path.name in uploaded_by_name]
+                if len(uploaded) == len(image_paths) and not pending:
                     break
         except Exception:
             uploaded = None
         page.wait_for_timeout(250)
-    if not uploaded:
-        raise RuntimeError("ChatGPT did not confirm the uploaded image in its composer")
+    if not uploaded or len(uploaded) != len(image_paths):
+        raise RuntimeError("ChatGPT did not confirm all uploaded images in its composer")
     page.wait_for_timeout(500)
-    return {"status": "uploaded", "filename": image_path.name,
-            "bytes": image_path.stat().st_size, "file_id": uploaded.get("fileId"),
-            "width": uploaded.get("width"), "height": uploaded.get("height"),
-            "file_input_count": input_count}
+    return [{"status": "uploaded", "filename": image_path.name,
+             "bytes": image_path.stat().st_size, "file_id": item.get("fileId"),
+             "width": item.get("width"), "height": item.get("height"),
+             "file_input_count": input_count}
+            for image_path, item in zip(image_paths, uploaded)]
+
+
+def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
+    """Backward-compatible single-image helper."""
+    return attach_image_files(page, [image_path], timeout_ms=timeout_ms)[0]
 
 
 def send_prompt(page, composer, prompt_text: str) -> None:

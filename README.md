@@ -19,7 +19,7 @@ Open **Actions → ChatGPT website lead hunt → Run workflow** on the `git-chat
 
 The workflows use Node.js 24-compatible action releases: `actions/checkout@v5`, `actions/setup-python@v6`, and `actions/upload-artifact@v6`. The production ChatGPT runner uses headed Chromium under Xvfb through `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules. The runner owns response wait, settle, and retry behavior. The lead-hunt code consumes its validated response. The workflow records failures and diagnostics and does not attempt CAPTCHA handling.
 
-The prompt requests independent local businesses with direct official website URLs, supporting source URLs, and service-area evidence. The workflow filters known directories and aggregators, checks candidate URLs and redirects against public-address rules, visits eligible sites directly, and leaves Hermes visual and human review pending.
+The prompt requests independent local businesses with direct official website URLs, supporting source URLs, and service-area evidence. The workflow filters known directories and aggregators, checks candidate URLs and redirects against public-address rules, visits eligible sites directly, and keeps automated visual suggestions separate from the human decision.
 
 ## Run outputs and audit
 
@@ -39,7 +39,7 @@ Each `runs/<run_key>/` folder contains:
 
 Image files are temporary inference inputs. The workflow uploads the complete run folder as a GitHub Actions artifact for seven days. The **Commit screenshots** switch now defaults to `false`, so branch commits retain ledgers and reports without adding new image files. Turn it on only when a run needs image files in the branch. Artifacts are still uploaded either way and expire after seven days.
 
-The GitHub Action does not run visual inference. To score an artifact, download and extract it into `runs/<run_key>/`, configure the local Hermes CLI/provider, and run:
+The main lead-hunt workflow does not yet run visual inference or save model visual scores into the candidate ledger. For the existing Hermes path, download and extract an artifact into `runs/<run_key>/`, configure the local Hermes CLI/provider, and run:
 
 ```bash
 python tools/complete_visual_reviews.py --run-dir runs/<run-key>
@@ -54,7 +54,7 @@ Images committed by earlier workflow runs remain in older Git commits. Removing 
 
 ## ChatGPT runner check
 
-**Actions → ChatGPT Xvfb runner check** sends a one-off prompt through the same runner. It uploads the answer, metadata, success screenshot, and failure diagnostics as a seven-day artifact; it does not commit probe files to a run folder. Turn on **Attach test image** to create and attach a temporary synthetic screenshot, then check whether the guest response can read its unique visual code. In image mode, the workflow validates both successful image upload and image-content recognition; the fixture, response, metadata, and diagnostics remain in the seven-day artifact and are not committed.
+**Actions → ChatGPT Xvfb runner check** sends one-off prompts through the same runner. It uploads the answer, metadata, success screenshot, and diagnostics as a seven-day artifact; it does not commit probe files to a run folder. **Attach test image** checks basic image upload and recognition with a synthetic fixture. **Review saved candidate** reads a saved candidate's desktop and mobile screenshots from `runs/<review_run_key>/`, sends both to guest ChatGPT, and validates a structured visual redesign score, verdict, viewport observations, confidence, and limitations against the candidate ledger. Its prompt uses the visual-opportunity rubric in the website-lead-hunting skill. The review output and screenshot copies stay in the seven-day artifact. This is an end-to-end capability probe; it does not yet update the lead-hunt candidate ledger or replace Hermes in the main batch workflow.
 
 The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. That run committed response data and desktop/mobile screenshots under `runs/westminster-kitchen-selector-test-20261101/`.
 
