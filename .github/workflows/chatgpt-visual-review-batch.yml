@@ -1,6 +1,11 @@
 name: ChatGPT visual review batch
 
 on:
+  push:
+    branches:
+      - git-chatgpt
+    paths:
+      - .github/workflows/chatgpt-visual-review-batch.yml
   workflow_dispatch:
     inputs:
       review_run_key:
@@ -41,8 +46,8 @@ jobs:
         id: validate
         shell: bash
         env:
-          REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
-          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+          REVIEW_RUN_KEY: ${{ inputs.review_run_key || 'westminster-kitchen-5site-e2e-20261102' }}
+          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id || '41469121990' }}
         run: |
           if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "review_run_key contains invalid characters" >&2
@@ -57,7 +62,7 @@ jobs:
       - name: Build bounded candidate matrix
         id: matrix
         env:
-          REVIEW_CANDIDATE_IDS: ${{ inputs.review_candidate_ids }}
+          REVIEW_CANDIDATE_IDS: ${{ inputs.review_candidate_ids || '0001-kakitchenremodelsandmore_com,0001-carusokitchens_com,0001-christiescompleteservices_com,0001-blueribbonext_com,0001-drapershomerenovations_com' }}
         run: |
           python tools/build_visual_review_matrix.py \
             --candidate-ids "$REVIEW_CANDIDATE_IDS" \
@@ -90,9 +95,9 @@ jobs:
         uses: actions/download-artifact@v7
         continue-on-error: true
         with:
-          name: lead-hunt-${{ needs.plan.outputs.run_key }}-${{ inputs.review_source_run_id }}
+          name: lead-hunt-${{ needs.plan.outputs.run_key }}-${{ inputs.review_source_run_id || '41469121990' }}
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.review_source_run_id }}
+          run-id: ${{ inputs.review_source_run_id || '41469121990' }}
           path: artifacts/lead-hunt-source/runs/${{ needs.plan.outputs.run_key }}
 
       - name: Prepare this candidate's four screenshots
@@ -102,7 +107,7 @@ jobs:
         env:
           REVIEW_RUN_KEY: ${{ needs.plan.outputs.run_key }}
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
-          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+          REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id || '41469121990' }}
         run: |
           ARTIFACT_RUN_DIR="artifacts/lead-hunt-source/runs/$REVIEW_RUN_KEY"
           if [[ ! -f "$ARTIFACT_RUN_DIR/CANDIDATE_LEDGER.jsonl" ]]; then
@@ -239,7 +244,7 @@ jobs:
         env:
           RUN_KEY: ${{ needs.plan.outputs.run_key }}
           CANDIDATE_IDS: ${{ needs.plan.outputs.candidate_ids }}
-          SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+          SOURCE_RUN_ID: ${{ inputs.review_source_run_id || '41469121990' }}
           REVIEW_RUN_ID: ${{ github.run_id }}
         run: |
           python tools/merge_chatgpt_visual_reviews.py \
