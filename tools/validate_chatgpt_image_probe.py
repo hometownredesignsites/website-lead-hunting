@@ -17,7 +17,7 @@ def main() -> int:
     metadata = json.loads(args.metadata.read_text(encoding="utf-8"))
     attachment = metadata.get("image_attachment") or {}
     result = {
-        "attachment_selected": attachment.get("status") == "file_selected",
+        "attachment_selected": attachment.get("status") == "uploaded",
         "visual_content_recognized": "lilac otter 638" in response and "orange" in response,
         "attachment": attachment,
     }

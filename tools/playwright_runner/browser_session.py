@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -215,20 +216,30 @@ def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
     selected = file_inputs.nth(input_count - 1)
     selected.set_input_files(str(image_path), timeout=timeout_ms)
     deadline = time.time() + max(1, timeout_ms / 1000)
-    names: list[str] = []
+    uploaded: dict | None = None
     while time.time() < deadline:
         try:
-            names = selected.evaluate("el => Array.from(el.files || []).map(file => file.name)")
+            attachment_inputs = page.locator("input[name='imageAttachments']")
+            pending_inputs = page.locator("input[name='pendingImageUploads']")
+            if attachment_inputs.count():
+                raw_attachments = attachment_inputs.first.evaluate("el => el.value")
+                attachments = json.loads(raw_attachments or "[]")
+                pending = (json.loads(pending_inputs.first.evaluate("el => el.value") or "[]")
+                           if pending_inputs.count() else [])
+                uploaded = next((item for item in attachments
+                                 if isinstance(item, dict) and item.get("name") == image_path.name), None)
+                if uploaded and not pending:
+                    break
         except Exception:
-            names = []
-        if image_path.name in names:
-            break
+            uploaded = None
         page.wait_for_timeout(250)
-    if image_path.name not in names:
-        raise RuntimeError("ChatGPT did not confirm the selected image attachment")
-    page.wait_for_timeout(1000)
-    return {"status": "file_selected", "filename": image_path.name,
-            "bytes": image_path.stat().st_size, "file_input_count": input_count}
+    if not uploaded:
+        raise RuntimeError("ChatGPT did not confirm the uploaded image in its composer")
+    page.wait_for_timeout(500)
+    return {"status": "uploaded", "filename": image_path.name,
+            "bytes": image_path.stat().st_size, "file_id": uploaded.get("fileId"),
+            "width": uploaded.get("width"), "height": uploaded.get("height"),
+            "file_input_count": input_count}
 
 
 def send_prompt(page, composer, prompt_text: str) -> None:

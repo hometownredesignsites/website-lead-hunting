@@ -54,7 +54,7 @@ Images committed by earlier workflow runs remain in older Git commits. Removing 
 
 ## ChatGPT runner check
 
-**Actions → ChatGPT Xvfb runner check** sends a one-off prompt through the same runner. It uploads the answer, metadata, success screenshot, and failure diagnostics as a seven-day artifact; it does not commit probe files to a run folder. Turn on **Attach test image** to create and attach a temporary synthetic screenshot, then check whether the guest response can read its unique visual code. In image mode, the workflow validates both successful file selection and image-content recognition; the fixture, response, metadata, and diagnostics remain in the seven-day artifact and are not committed.
+**Actions → ChatGPT Xvfb runner check** sends a one-off prompt through the same runner. It uploads the answer, metadata, success screenshot, and failure diagnostics as a seven-day artifact; it does not commit probe files to a run folder. Turn on **Attach test image** to create and attach a temporary synthetic screenshot, then check whether the guest response can read its unique visual code. In image mode, the workflow validates both successful image upload and image-content recognition; the fixture, response, metadata, and diagnostics remain in the seven-day artifact and are not committed.
 
 The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. That run committed response data and desktop/mobile screenshots under `runs/westminster-kitchen-selector-test-20261101/`.
 
