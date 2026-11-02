@@ -56,6 +56,8 @@ Images committed by earlier workflow runs remain in older Git commits. Removing 
 
 **Actions → ChatGPT Xvfb runner check** sends a one-off prompt through the same runner. It uploads the answer, metadata, success screenshot, and failure diagnostics as a seven-day artifact; it does not commit probe files to a run folder.
 
+**Actions → ChatGPT guest image attachment probe** tests whether the guest composer accepts a screenshot and whether ChatGPT can read its unique visual code. It uses the same headed Xvfb runner, creates a temporary synthetic screenshot during the job, and uploads the prompt, image, response, attachment metadata, and diagnostics as a seven-day artifact. It does not alter lead-hunt run data or commit image files.
+
 The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. That run committed response data and desktop/mobile screenshots under `runs/westminster-kitchen-selector-test-20261101/`.
 
 ## Local checks

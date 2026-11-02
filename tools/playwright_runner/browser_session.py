@@ -176,6 +176,61 @@ def set_composer_text(composer, text: str) -> None:
     )
 
 
+def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
+    """Attach one local image through ChatGPT's visible composer file input."""
+    image_path = image_path.expanduser().resolve()
+    if not image_path.is_file():
+        raise FileNotFoundError(f"Image attachment does not exist: {image_path}")
+    if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise ValueError("ChatGPT image probe accepts PNG, JPEG, or WebP files")
+
+    file_inputs = page.locator("input[type='file']")
+    if file_inputs.count() == 0:
+        plus_selectors = [
+            "button[data-testid='composer-plus-btn']",
+            "button[aria-label*='Attach']",
+            "button[aria-label*='attach']",
+            "button[aria-label*='Upload']",
+            "button[aria-label*='upload']",
+        ]
+        clicked = False
+        for selector in plus_selectors:
+            candidate = page.locator(selector).first
+            try:
+                if candidate.count() and candidate.is_visible() and candidate.is_enabled():
+                    candidate.click(timeout=2000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            raise RuntimeError("Could not find a visible ChatGPT attachment control")
+        deadline = time.time() + max(1, timeout_ms / 1000)
+        while time.time() < deadline and file_inputs.count() == 0:
+            page.wait_for_timeout(250)
+
+    if file_inputs.count() == 0:
+        raise RuntimeError("ChatGPT did not expose a file input after opening the attachment menu")
+    input_count = file_inputs.count()
+    selected = file_inputs.nth(input_count - 1)
+    selected.set_input_files(str(image_path), timeout=timeout_ms)
+    deadline = time.time() + max(1, timeout_ms / 1000)
+    names: list[str] = []
+    while time.time() < deadline:
+        try:
+            names = selected.evaluate("el => Array.from(el.files || []).map(file => file.name)")
+        except Exception:
+            names = []
+        if image_path.name in names:
+            break
+        page.wait_for_timeout(250)
+    if image_path.name not in names:
+        raise RuntimeError("ChatGPT did not confirm the selected image attachment")
+    page.wait_for_timeout(1000)
+    return {"status": "file_selected", "filename": image_path.name,
+            "bytes": image_path.stat().st_size, "file_input_count": input_count}
+
+
 def send_prompt(page, composer, prompt_text: str) -> None:
     dismiss_blocking_modals(page)
     try:
