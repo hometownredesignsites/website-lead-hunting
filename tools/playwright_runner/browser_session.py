@@ -114,8 +114,8 @@ def assistant_turns(page):
 def extract_response_text(assistant_messages, before_count: int, before_last_text: str) -> str:
     def _normalize(text: str) -> str:
         cleaned = (text or "").strip()
-        cleaned = re.sub(r"^\s*chatgpt\s+said:\s*\n+", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^\s*chatgpt\s*:\s*\n+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*chatgpt\s+said:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*chatgpt\s*:\s*", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip()
 
     after_count = assistant_messages.count()

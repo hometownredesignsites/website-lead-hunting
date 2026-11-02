@@ -17,6 +17,10 @@ from .prompt_contracts import extract_json_payload
 from .recovery import click_retry_if_visible, refresh_chat
 
 
+class EmptyResponseFollowupError(RuntimeError):
+    """Raised when ChatGPT stays silent after a same-chat text follow-up."""
+
+
 def run_stage_once(
     page,
     timeout_ms: int,
@@ -42,6 +46,7 @@ def run_stage_once(
         "attempt_failures": [],
         "image_attachment": None,
         "image_attachments": [],
+        "empty_response_followup_used": False,
     }
     start = time.time()
 
@@ -102,7 +107,41 @@ def run_stage_once(
             wait_seconds=wait_seconds,
         )
         if not response_text:
-            raise RuntimeError("Assistant response was empty for stage submission.")
+            metadata["empty_response_followup_used"] = True
+            followup_composer = find_chat_composer(page, timeout_ms=timeout_ms)
+            if followup_composer is None:
+                raise EmptyResponseFollowupError(
+                    "Assistant response was empty and no composer was available for a same-chat follow-up."
+                )
+            followup_messages = assistant_turns(page)
+            followup_before_count = followup_messages.count()
+            followup_before_last_text = ""
+            if followup_before_count > 0:
+                try:
+                    followup_before_last_text = followup_messages.last.inner_text().strip()
+                except Exception:
+                    followup_before_last_text = ""
+            followup_prompt = (
+                "Your previous response was empty. Please retry the visual assessment using the four "
+                "screenshots already attached and the candidate context in this chat. Follow the original "
+                "rubric and output contract. Return only the required JSON object, without a preamble or "
+                "code fence."
+            )
+            send_prompt(page, followup_composer, followup_prompt)
+            page.wait_for_timeout(1200)
+            followup_messages = assistant_turns(page)
+            response_text = wait_for_valid_response(
+                page,
+                followup_messages,
+                before_count=followup_before_count,
+                before_last_text=followup_before_last_text,
+                wait_seconds=wait_seconds,
+            )
+            if not response_text:
+                raise EmptyResponseFollowupError(
+                    "Assistant response remained empty after the same-chat text follow-up."
+                )
+            assistant_messages = followup_messages
         refreshed = stabilize_response(
             page,
             assistant_messages,
@@ -116,6 +155,9 @@ def run_stage_once(
         response = _single_attempt()
     except Exception as exc:
         _capture_attempt_failure(1, str(exc))
+        if isinstance(exc, EmptyResponseFollowupError):
+            metadata["failure_reason"] = str(exc)
+            raise
         if not allow_retry:
             metadata["failure_reason"] = str(exc)
             raise
