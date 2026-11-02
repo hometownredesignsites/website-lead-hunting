@@ -116,8 +116,8 @@ jobs:
           if [[ "$ATTACH_TEST_IMAGE" == "true" ]]; then
             image_args+=(--image-file artifacts/chatgpt-xvfb-probe/image-probe.png)
           elif [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop.png)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile.png)
+            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop.jpg)
+            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile.jpg)
           fi
           context_args=()
           if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then

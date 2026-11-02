@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 from pathlib import Path
+
+from PIL import Image
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -37,6 +38,7 @@ def main() -> int:
     screenshot_record = candidate.get("screenshots") or {}
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
+    viewport_crop_heights = {"desktop": 900, "mobile": 844}
     for viewport in ("desktop", "mobile"):
         record = screenshot_record.get(viewport) or {}
         if record.get("status") != "saved" or not record.get("path"):
@@ -50,10 +52,18 @@ def main() -> int:
             raise ValueError(f"Screenshot path escapes the repository: {source}") from exc
         if not source.is_file() or source.suffix.lower() not in IMAGE_SUFFIXES:
             raise FileNotFoundError(f"Saved {viewport} screenshot is unavailable: {source}")
-        target = output_dir / f"{viewport}{source.suffix.lower()}"
-        shutil.copy2(source, target)
+        target = output_dir / f"{viewport}.jpg"
+        with Image.open(source) as image:
+            original_size = image.size
+            crop_height = min(viewport_crop_heights[viewport], image.height)
+            image.crop((0, 0, image.width, crop_height)).convert("RGB").save(
+                target, format="JPEG", quality=88, optimize=True
+            )
         images.append({"viewport": viewport, "path": str(target), "filename": target.name,
-                       "source_path": record["path"], "bytes": target.stat().st_size})
+                       "source_path": record["path"], "bytes": target.stat().st_size,
+                       "source_dimensions": {"width": original_size[0], "height": original_size[1]},
+                       "uploaded_dimensions": {"width": image.width, "height": crop_height},
+                       "crop": "top viewport crop from saved full-page screenshot"})
 
     context = {
         "candidate_id": candidate.get("candidate_id"),

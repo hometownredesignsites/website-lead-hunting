@@ -229,11 +229,13 @@ def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -
                 attachments = json.loads(raw_attachments or "[]")
                 pending = (json.loads(pending_inputs.first.evaluate("el => el.value") or "[]")
                            if pending_inputs.count() else [])
-                uploaded_by_name = {item.get("name"): item for item in attachments
-                                    if isinstance(item, dict)}
-                uploaded = [uploaded_by_name[path.name] for path in image_paths
-                            if path.name in uploaded_by_name]
-                if len(uploaded) == len(image_paths) and not pending:
+                if len(attachments) >= len(image_paths):
+                    uploaded = attachments[-len(image_paths):]
+                else:
+                    uploaded = []
+                if (len(uploaded) == len(image_paths)
+                        and all(isinstance(item, dict) and item.get("fileId") for item in uploaded)
+                        and not pending):
                     break
         except Exception:
             uploaded = None
@@ -242,6 +244,7 @@ def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -
         raise RuntimeError("ChatGPT did not confirm all uploaded images in its composer")
     page.wait_for_timeout(500)
     return [{"status": "uploaded", "filename": image_path.name,
+             "uploaded_filename": item.get("name"),
              "bytes": image_path.stat().st_size, "file_id": item.get("fileId"),
              "width": item.get("width"), "height": item.get("height"),
              "file_input_count": input_count}
