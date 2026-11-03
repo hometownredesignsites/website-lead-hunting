@@ -1,6 +1,6 @@
 # ChatGPT Website Lead Hunting
 
-This repository runs local-business discovery and direct website assessment in GitHub Actions. The discovery step asks ChatGPT through a headed Playwright/Xvfb runner; the site-review step visits eligible candidate sites and captures temporary desktop and mobile screenshots.
+This repository runs local-business discovery and direct website assessment in GitHub Actions. The lead-hunt workflow asks ChatGPT through a headed Playwright/Xvfb runner, visits returned direct business sites, and captures temporary desktop and mobile screenshots. A separate visual-review workflow sends four prepared screenshots per candidate to ChatGPT and saves a validated scorecard with the candidate record.
 
 ## Inputs and batch size
 
@@ -11,13 +11,49 @@ The workflow reads two committed CSVs under `config/`:
 
 The included rows are starter examples. Replace them with the complete approved category and city lists before a market run. The planning step prints the Cartesian product and the current batch size before research begins.
 
-Open **Actions → ChatGPT website lead hunt → Run workflow** on the `git-chatgpt` branch. Use a stable `run_key` to resume the same inputs. A changed category/city set requires a new key. Each manual dispatch processes up to 20 pending category/city prompts and assesses up to 10 sites per prompt. Runs are serial and bounded; the current workflow has no schedule or automatic fan-out. It uses a six-hour job timeout, so large lists must be run in measured batches. A 3,200-query input requires at least 160 dispatches at 20 queries each. Benchmark smaller batches before increasing volume.
+Open **Actions → ChatGPT website lead hunt → Run workflow** on the `git-chatgpt` branch. Use a stable `run_key` to resume the same inputs. A changed category/city set requires a new key. Each manual dispatch processes up to 20 pending category/city prompts and assesses up to 10 sites per prompt. Lead-hunt prompts run sequentially; this stage has no schedule or parallel query fan-out. It uses a six-hour job timeout, so large lists must be run in measured batches. A 3,200-query input requires at least 160 dispatches at 20 queries each. Benchmark smaller batches before increasing volume.
 
 `Capture Google evidence` is an optional comparison pass that stores raw Google result snippets and reported counts beside ChatGPT's results. It is off by default. Google evidence extraction does not visit or independently assess every Google result.
 
+## Workflow map
+
+The lead hunt and visual review are separate, manually started workflows. Only the retry scheduler runs on a schedule. The diagram shows what persists in Git, what stays in short-lived Actions artifacts, and where a later batch resumes.
+
+```mermaid
+flowchart TD
+    A[Committed config CSVs<br/>categories × cities] --> B[Actions: ChatGPT website lead hunt<br/>manual dispatch; up to 20 queries]
+    B --> C[ChatGPT research under Xvfb<br/>one query at a time]
+    C --> D[Visit direct candidate sites<br/>technical checks + desktop/mobile screenshots]
+    D --> E[Validate ledgers and write run summary]
+    E --> F[Commit text records to git-chatgpt]
+    D --> G[Upload lead-hunt artifact<br/>screenshots + run evidence; 7 days]
+    F --> H[Actions: ChatGPT visual review batch<br/>manual dispatch]
+    G --> H
+    H --> I{Candidate IDs supplied?}
+    I -- blank --> J[Select next eligible high/medium candidates<br/>from committed candidate ledger; max 20]
+    I -- supplied --> K[Validate requested IDs<br/>max 20]
+    J --> L[One isolated review job per candidate<br/>max parallel 2; fail-fast off]
+    K --> L
+    G --> L
+    L --> M[Prepare desktop top/mid<br/>and mobile top/mid crops]
+    M --> N[ChatGPT visual assessment<br/>Xvfb; in-session retry/follow-up]
+    N --> O[Upload per-candidate diagnostics<br/>7 days]
+    N --> P[Merge outcomes with candidate ledger]
+    P --> Q[Write passed / retry-needed / failed report<br/>and commit checkpoint]
+    Q --> R[High/medium CSV + durable scorecards]
+    Q --> S{Recoverable retry-needed?}
+    S -- yes --> T[Scheduled retry queue<br/>due after 30 minutes; up to 2 delayed rounds]
+    T --> L
+    Q --> U[Next blank-ID batch can resume<br/>after this batch commits]
+```
+
+**What starts each stage:** lead hunt is started from **Actions → ChatGPT website lead hunt**. The visual batch is started from **Actions → ChatGPT visual review batch** after the lead-hunt run has committed its ledger. Enter its run key and Actions run ID; leave candidate IDs blank for automatic selection, or provide IDs for a targeted batch. The review workflow downloads screenshots from that lead-hunt run's artifact; it never falls back to screenshots in the repository. The next batch is another manual dispatch, which selects from the now-committed ledger. The retry scheduler checks due retry records every five minutes and dispatches those reviews automatically.
+
+**Checkpoint and retention:** each visual batch merges and pushes its text results before it completes. The next batch uses that committed ledger, so completed visual scores are skipped. Screenshots and per-candidate diagnostics remain in Actions artifacts for seven days; candidate ledgers, summaries, retry queues, and CSV exports are committed text records. The lead-hunt concurrency lock serializes lead hunts, visual-review merges, and retry-queue writes on the same branch.
+
 ## GitHub Actions runtime
 
-The workflows use Node.js 24-compatible action releases: `actions/checkout@v5`, `actions/setup-python@v6`, and `actions/upload-artifact@v6`. The production ChatGPT runner uses headed Chromium under Xvfb through `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules. It waits for and validates responses, can request a short same-chat follow-up when a visual response is blank or lacks a scorecard, and records diagnostics. The batch workflow retries only recoverable failures in a new Xvfb/ChatGPT session with a new browser profile. It does not attempt CAPTCHA handling.
+The workflows use Node.js 24-compatible action releases: `actions/checkout@v5`, `actions/setup-python@v6`, and `actions/upload-artifact@v6`. The production ChatGPT runner uses headed Chromium under Xvfb through `tools/chatgpt_file_playwright_anonymous_ci.py` and the supporting `tools/playwright_runner/` modules. It waits for and validates responses, can request a short same-chat follow-up when a visual response is blank or lacks a scorecard, and records diagnostics. Within a candidate job, the runner uses its same-session retry and refresh behavior. If the outcome remains recoverable, the scheduled retry workflow starts a later job with a fresh browser profile, up to two delayed rounds. The workflows do not attempt CAPTCHA handling.
 
 The prompt requests independent local businesses with direct official website URLs, supporting source URLs, and service-area evidence. The workflow filters known directories and aggregators, checks candidate URLs and redirects against public-address rules, visits eligible sites directly, and keeps automated visual suggestions separate from the human decision.
 
@@ -54,7 +90,7 @@ The initial technical screen also records the homepage response status and final
 
 These checks are bounded for batch runtime, so the result includes scope limits and can report `partial` or `unknown`. They inspect the homepage plus a small set of relevant same-site pages, not every URL on a business's domain. Four-image ChatGPT visual assessment is a separate stage. It covers desktop top/mid and mobile top/mid views for visual judgments such as hero imagery, text contrast, layout, hierarchy, clutter, image presentation, and mobile usability. The visual score follows the rubric used by the successful browser run: high for a severe flaw or several major flaws, and medium for a meaningful opportunity such as dated styling, weak hierarchy, sparse or poor project photos, text-heavy layout, or confusing navigation. The screenshots must visibly support the score; this review does not make functional claims that require scripted checks.
 
-For a group of sites, use **Actions → ChatGPT visual review batch**. Enter the source lead-hunt run ID and run key. Leave candidate IDs blank to automatically select the next eligible high/medium candidates with no valid visual score, or provide IDs for a targeted review. Automatic selection excludes candidates already marked `retry-needed` or `failed`, since those statuses are handled by the retry queue or remain terminal for human follow-up. Each dispatch selects at most 20 candidates and runs at most two isolated Xvfb/ChatGPT jobs at once, with `fail-fast` disabled. After the batch is merged and committed, start another dispatch with the same run key and source run ID and leave candidate IDs blank; selection resumes from the committed candidate ledger, so completed scores are not lost or repeated. The plan report shows how many candidates were eligible and how many remain.
+For a group of sites, use **Actions → ChatGPT visual review batch**. Enter the source lead-hunt run ID and run key. Leave candidate IDs blank to automatically select the next eligible high/medium candidates with no valid visual score, or provide IDs for a targeted review. Auto-selection reads `runs/<run_key>/CANDIDATE_LEDGER.jsonl` on the selected branch and requires `site_check_status=loaded` and `automated_priority=high` or `medium`. It skips a valid scorecard and candidates whose latest attempt is already `retry-needed` or `failed`; those outcomes remain under their retry or human-follow-up path. Each dispatch selects at most 20 candidates and runs at most two isolated Xvfb/ChatGPT jobs at once, with `fail-fast` disabled. After the batch is merged and committed, start another dispatch with the same run key and source run ID and leave candidate IDs blank; selection resumes from the committed candidate ledger, so completed scores are not lost or repeated. The plan report shows how many candidates were eligible and how many remain. The later batch is not automatically self-chained.
 
 Each site job uses the established runner behavior: one persistent browser profile for that candidate, with the runner's in-session retry and refresh behavior enabled. An empty or scoreless first response can receive a short text follow-up in the same chat before the attempt is classified. A permanent input or identity problem is `failed`; a recoverable problem that persists through the runner's retry is `retry-needed`; a validated scorecard is `passed`. Candidate failures do not stop other candidates or prevent the merge from saving their results. After all jobs finish, the workflow merges valid scorecards into their matching `chatgpt_visual_review` candidate-ledger fields, records attempt status and failure class, refreshes the run summary, and commits those text records to the selected branch before that dispatch ends. The GitHub Actions step summary explicitly counts passed, retry-needed, and failed candidates and lists their IDs. A green workflow means statuses were recorded and committed; it does not mean every candidate passed. Detailed responses, screenshots, network logs, and runner diagnostics stay in the seven-day per-candidate artifacts. A workflow-level failure is reserved for execution problems that prevent the batch from being planned, merged, or committed. Recoverable candidates marked `retry-needed` are queued for up to two delayed automatic rounds; each delayed round starts a new job and browser profile. Run another blank-ID batch after those rounds if you want to resume with remaining unreviewed candidates.
 
@@ -64,7 +100,7 @@ The fixture-driven recovery checks cover missing source screenshots, screenshot 
 
 When a batch merge records a recoverable `retry-needed` result, it writes a due time 30 minutes later to `CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json`. **Actions → Schedule ChatGPT visual review retries** checks due entries every five minutes, verifies that the original lead-hunt artifact still exists, and dispatches only candidates whose latest attempt still needs a retry. It commits each retry reservation before dispatching the review workflow, so the review job can validate the reservation from the branch. This normally starts the retry about 30–35 minutes after failure; GitHub may delay scheduled events under load. The scheduler runs from the default branch and shares the lead-hunt concurrency lock so queue writes and ledger merges do not race.
 
-The scheduler allows two delayed rounds after the initial batch. Each round starts a new candidate job with the established in-session retry behavior; it does not create three separate fresh profiles inside a job. A passing score resolves the queue entry, a permanent `failed` result is not retried, and candidates still marked `retry-needed` after both automatic rounds are left for manual review. If the source artifact has expired or is unavailable, the queue records that new screenshots are required instead of repeatedly dispatching reviews that cannot start. Source artifacts are retained for seven days.
+The scheduler allows two delayed rounds after the initial batch. Each round starts a new candidate job with the established in-session retry behavior; it does not create three separate fresh profiles inside a job. A passing score resolves the queue entry, a permanent `failed` result is not retried, and candidates still marked `retry-needed` after both automatic rounds are left for manual follow-up. To review one of those candidates again, dispatch a targeted batch with its explicit candidate ID; blank-ID automatic selection skips it. If the source artifact has expired or is unavailable, the queue records that new screenshots are required instead of repeatedly dispatching reviews that cannot start. Source artifacts are retained for seven days.
 
 ## Temporary image scoring and cleanup
 
@@ -87,7 +123,7 @@ Older screenshots were removed from both branch tips and Git history as part of 
 
 **Actions → ChatGPT Xvfb runner check** sends one-off prompts through the same Xvfb runner. It uploads the answer, metadata, success screenshot, and diagnostics as a seven-day artifact; it does not commit probe files to a run folder. **Attach test image** checks basic image upload and recognition with a synthetic fixture. **Review saved candidate** is a single-candidate capability probe: it requires the numeric source run ID from the lead-hunt Actions URL and downloads that run's `lead-hunt-<run_key>-<run_id>` artifact, which includes the candidate ledger and temporary screenshots. It reads the candidate and screenshots only from that downloaded artifact. If the artifact, ledger, or any source screenshot is unavailable, the workflow fails; it does not fall back to checked-in repository files. It prepares four JPEG viewport crops: desktop top, desktop mid-page, mobile top, and mobile mid-page. Mid-page crops are centered at 35% of the desktop and 60% of the mobile screenshot's scrollable height. All four are attached to guest ChatGPT. Both the one-off probe and batch review use the runner's in-session refresh/retry behavior; the batch scheduler can later dispatch a new job with a fresh profile for recoverable failures.
 
-The runner compatibility fix was exercised by [GitHub Actions run #5](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41374972944), using one Kitchen remodelers query and one site assessment for Westminster, CO. Its response data remains in the run folder; screenshots are retained only in the short-lived Actions artifact.
+The current review and checkpoint path was verified by [GitHub Actions visual review run #7](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41565515143): one candidate received a validated scorecard, the merge job committed it, and the job summary reported candidate outcome counts. Screenshots remain only in the short-lived Actions artifact.
 
 ## Local checks
 
