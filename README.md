@@ -11,43 +11,56 @@ The workflow reads two committed CSVs under `config/`:
 
 The included rows are starter examples. Replace them with the complete approved category and city lists before a market run. The planning step prints the Cartesian product and the current batch size before research begins.
 
-Open **Actions → ChatGPT website lead hunt → Run workflow** on the `git-chatgpt` branch. Use a stable `run_key` to resume the same inputs. A changed category/city set requires a new key. Each manual dispatch processes up to 20 pending category/city prompts and assesses up to 10 sites per prompt. Lead-hunt prompts run sequentially; this stage has no schedule or parallel query fan-out. It uses a six-hour job timeout, so large lists must be run in measured batches. A 3,200-query input requires at least 160 dispatches at 20 queries each. Benchmark smaller batches before increasing volume.
+For one bounded lead-hunt run, open **Actions → ChatGPT website lead hunt → Run workflow** on the `git-chatgpt` branch. Use a stable `run_key` to resume the same inputs. A changed category/city set requires a new key. Each dispatch processes up to 20 pending category/city prompts and assesses up to 10 sites per prompt. Lead-hunt prompts run sequentially; this stage has no schedule or parallel query fan-out. It uses a six-hour job timeout.
+
+For an automatically checkpointed campaign, use **Actions → Lead-hunt campaign coordinator → Run workflow** and choose `start`. Give the campaign a new `run_key`, then choose a batch size, sites-per-query limit, and retry allowance. The coordinator fingerprints the committed CSVs, creates `runs/<run_key>/CAMPAIGN_STATE.json`, and dispatches one regular lead-hunt workflow run. Each child run commits its query/candidate ledger and progress. On completion, the coordinator reads the run metadata and committed progress, checkpoints the campaign, then dispatches the next bounded batch. At 20 queries per batch, 3,200 queries take at least 160 child runs; the coordinator removes the need for 160 manual dispatches while keeping the browser jobs below the six-hour timeout. Start at 2–5 queries per batch, measure run duration and successful-query rate, then raise the batch size gradually.
+
+The campaign stops as `complete` when all CSV combinations have a successful terminal record. It retries a failed batch at most the configured number of times, but pauses without retrying when Google/ChatGPT reports a challenge or when the child run is cancelled. It also pauses after its retry allowance is exhausted. To continue a paused campaign, run **Lead-hunt campaign coordinator** again with mode `resume` and the same `run_key`, after inspecting the diagnostics and resolving any challenge. Campaigns require the original committed CSV content; a fingerprint mismatch is rejected. `CAMPAIGN_STATE.json` records the batch/attempt numbers, progress, run IDs, and pause reason, so completed batches remain checkpointed in Git if a later batch is interrupted.
 
 `Capture Google evidence` is an optional comparison pass that stores raw Google result snippets and reported counts beside ChatGPT's results. It is off by default. Google evidence extraction does not visit or independently assess every Google result.
 
 ## Workflow map
 
-The lead hunt and visual review are separate, manually started workflows. Only the retry scheduler runs on a schedule. The diagram shows what persists in Git, what stays in short-lived Actions artifacts, and where a later batch resumes.
+The campaign coordinator chains bounded lead-hunt runs; standalone lead hunts and visual reviews can still be started manually. Only the visual-review retry scheduler runs on a schedule. The diagram shows what persists in Git, what stays in short-lived Actions artifacts, and where a later campaign batch resumes.
 
 ```mermaid
 flowchart TD
-    A[Committed config CSVs<br/>categories × cities] --> B[Actions: ChatGPT website lead hunt<br/>manual dispatch; up to 20 queries]
-    B --> C[ChatGPT research under Xvfb<br/>one query at a time]
-    C --> D[Visit direct candidate sites<br/>technical checks + desktop/mobile screenshots]
-    D --> E[Validate ledgers and write run summary]
-    E --> F[Commit text records to git-chatgpt]
-    D --> G[Upload lead-hunt artifact<br/>screenshots + run evidence; 7 days]
-    F --> H[Actions: ChatGPT visual review batch<br/>manual dispatch]
-    G --> H
-    H --> I{Candidate IDs supplied?}
-    I -- blank --> J[Select next eligible high/medium candidates<br/>from committed candidate ledger; max 20]
-    I -- supplied --> K[Validate requested IDs<br/>max 20]
-    J --> L[One isolated review job per candidate<br/>max parallel 2; fail-fast off]
-    K --> L
-    G --> L
-    L --> M[Prepare desktop top/mid<br/>and mobile top/mid crops]
-    M --> N[ChatGPT visual assessment<br/>Xvfb; in-session retry/follow-up]
-    N --> O[Upload per-candidate diagnostics<br/>7 days]
-    N --> P[Merge outcomes with candidate ledger]
-    P --> Q[Write passed / retry-needed / failed report<br/>and commit checkpoint]
-    Q --> R[High/medium CSV + durable scorecards]
-    Q --> S{Recoverable retry-needed?}
-    S -- yes --> T[Scheduled retry queue<br/>due after 30 minutes; up to 2 delayed rounds]
-    T --> L
-    Q --> U[Next blank-ID batch can resume<br/>after this batch commits]
+    A[Committed config CSVs<br/>categories × cities] --> B[Start campaign<br/>or run one standalone batch]
+    B --> C[Campaign state checkpoint<br/>CSV fingerprints + pending batch]
+    C --> D[Actions: ChatGPT website lead hunt<br/>one bounded batch; up to 20 queries]
+    D --> E[ChatGPT research under Xvfb<br/>one query at a time]
+    E --> F[Visit direct candidate sites<br/>technical checks + desktop/mobile screenshots]
+    F --> G[Validate ledgers and write run summary]
+    G --> H[Commit text records + progress to git-chatgpt]
+    F --> I[Upload lead-hunt artifact<br/>screenshots + run evidence; 7 days]
+    H --> J[Completion event checks progress<br/>and commits campaign checkpoint]
+    J --> K{All queries complete?}
+    K -- no; no challenge --> D
+    K -- challenge / cancelled / retries spent --> L[Pause campaign for inspection]
+    K -- yes --> M[Campaign complete]
+    H --> N[Actions: ChatGPT visual review batch<br/>manual dispatch]
+    I --> N
+    N --> O{Candidate IDs supplied?}
+    O -- blank --> P[Select next eligible high/medium candidates<br/>from committed candidate ledger; max 20]
+    O -- supplied --> Q[Validate requested IDs<br/>max 20]
+    P --> R[One isolated review job per candidate<br/>max parallel 2; fail-fast off]
+    Q --> R
+    I --> R
+    R --> S[Prepare desktop top/mid<br/>and mobile top/mid crops]
+    S --> T[ChatGPT visual assessment<br/>Xvfb; in-session retry/follow-up]
+    T --> U[Upload per-candidate diagnostics<br/>7 days]
+    T --> V[Merge outcomes with candidate ledger]
+    V --> W[Write passed / retry-needed / failed report<br/>and commit checkpoint]
+    W --> X[High/medium CSV + durable scorecards]
+    W --> Y{Recoverable retry-needed?}
+    Y -- yes --> Z[Scheduled retry queue<br/>due after 30 minutes; up to 2 delayed rounds]
+    Z --> R
+    W --> AA[Next blank-ID batch can resume<br/>after this batch commits]
 ```
 
-**What starts each stage:** lead hunt is started from **Actions → ChatGPT website lead hunt**. The visual batch is started from **Actions → ChatGPT visual review batch** after the lead-hunt run has committed its ledger. Enter its run key and Actions run ID; leave candidate IDs blank for automatic selection, or provide IDs for a targeted batch. The review workflow downloads screenshots from that lead-hunt run's artifact; it never falls back to screenshots in the repository. The next batch is another manual dispatch, which selects from the now-committed ledger. The retry scheduler checks due retry records every five minutes and dispatches those reviews automatically.
+The campaign controller and the child lead-hunt job use the same per-branch Actions concurrency lock. A controller run holds it only long enough to commit state and dispatch the next child; the six-hour Xvfb run remains a separate workflow. `workflow_run` completion events are deduplicated by workflow-run ID, and campaign identity is read from the completed run's REST record rather than relying on fields omitted from the event payload. GitHub Actions starts a dispatched workflow with `GITHUB_TOKEN`; no personal token secret is required.
+
+**What starts each stage:** use the campaign coordinator for hands-off sequential lead-hunt batches, or start **Actions → ChatGPT website lead hunt** directly for a one-off bounded run. The visual batch is started from **Actions → ChatGPT visual review batch** after the lead-hunt run has committed its ledger. Enter its run key and Actions run ID; leave candidate IDs blank for automatic selection, or provide IDs for a targeted batch. The review workflow downloads screenshots from that lead-hunt run's artifact; it never falls back to screenshots in the repository. The retry scheduler checks due retry records every five minutes and dispatches those reviews automatically.
 
 **Checkpoint and retention:** each visual batch merges and pushes its text results before it completes. The next batch uses that committed ledger, so completed visual scores are skipped. A blank-ID selection with zero eligible candidates succeeds with “No eligible candidates; batch complete” and skips review and merge jobs. Screenshots and per-candidate diagnostics remain in Actions artifacts for seven days; candidate ledgers, summaries, retry queues, and CSV exports are committed text records. The lead-hunt concurrency lock serializes lead hunts, visual-review merges, and retry-queue writes on the same branch. These three workflows use GitHub Actions `queue: max`, which allows up to 100 pending runs in the shared group instead of replacing the existing pending run; active work is not canceled. Scheduled retry polls share this queue and may wait behind other work.
 

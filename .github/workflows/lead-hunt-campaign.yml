@@ -1,0 +1,200 @@
+name: Lead-hunt campaign coordinator
+run-name: Lead-hunt campaign ${{ inputs.run_key || github.event.workflow_run.display_title || 'completion handler' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Start a new campaign or resume a paused campaign
+        required: true
+        type: choice
+        options:
+          - start
+          - resume
+      run_key:
+        description: Stable key for this campaign and its durable run records
+        required: true
+        type: string
+      region:
+        description: Market label used in the reports (used when starting)
+        required: false
+        default: Colorado
+        type: string
+      queries_per_batch:
+        description: Queries per independently checkpointed lead-hunt run (1-20)
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "5"
+          - "10"
+          - "20"
+      sites_per_query:
+        description: Direct sites to assess per query (1-10; used when starting)
+        required: true
+        default: "3"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "5"
+          - "8"
+          - "10"
+      max_retries_per_batch:
+        description: Automatic retries before the campaign pauses for inspection
+        required: true
+        default: "2"
+        type: choice
+        options:
+          - "0"
+          - "1"
+          - "2"
+      capture_google_evidence:
+        description: Capture optional raw Google comparison evidence (used when starting)
+        required: true
+        default: false
+        type: boolean
+
+  workflow_run:
+    workflows:
+      - ChatGPT website lead hunt
+    types:
+      - completed
+
+permissions:
+  actions: write
+  contents: write
+
+# The coordinator only holds this shared lock while changing a checkpoint or
+# dispatching the next bounded batch. The six-hour browser job remains separate.
+concurrency:
+  group: website-lead-hunt-${{ github.repository }}-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Resolve target branch
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_REF: ${{ github.ref_name }}
+          COMPLETED_REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            TARGET_REF="$COMPLETED_REF"
+          else
+            TARGET_REF="$MANUAL_REF"
+          fi
+          if [[ -z "$TARGET_REF" ]] || ! git check-ref-format --branch "$TARGET_REF" >/dev/null; then
+            echo "Could not resolve a valid target branch" >&2
+            exit 1
+          fi
+          echo "ref=$TARGET_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Check out target branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+
+      - name: Start or resume a campaign
+        id: manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          MODE: ${{ inputs.mode }}
+          RUN_KEY: ${{ inputs.run_key }}
+          REGION: ${{ inputs.region }}
+          QUERIES_PER_BATCH: ${{ inputs.queries_per_batch }}
+          SITES_PER_QUERY: ${{ inputs.sites_per_query }}
+          MAX_RETRIES: ${{ inputs.max_retries_per_batch }}
+          CAPTURE_GOOGLE_EVIDENCE: ${{ inputs.capture_google_evidence }}
+        run: |
+          args=(--mode "$MODE" --run-key "$RUN_KEY" --github-output "$GITHUB_OUTPUT")
+          if [[ "$MODE" == "start" ]]; then
+            args+=(--region "$REGION" --max-queries "$QUERIES_PER_BATCH" \
+              --max-sites-per-query "$SITES_PER_QUERY" --max-retries "$MAX_RETRIES")
+            if [[ "$CAPTURE_GOOGLE_EVIDENCE" == "true" ]]; then
+              args+=(--capture-google-evidence)
+            fi
+          fi
+          python tools/lead_hunt_campaign.py "${args[@]}"
+
+      - name: Process completed lead-hunt batch
+        id: completion
+        if: github.event_name == 'workflow_run'
+        env:
+          TARGET_REF: ${{ steps.target.outputs.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python tools/lead_hunt_campaign.py --mode after-run \
+            --event-file "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
+
+      - name: Write campaign status summary
+        if: always()
+        env:
+          RUN_KEY: ${{ steps.manual.outputs.run_key || steps.completion.outputs.run_key }}
+        run: |
+          if [[ -z "$RUN_KEY" || ! -f "runs/$RUN_KEY/CAMPAIGN_STATE.json" ]]; then
+            echo "This lead-hunt run was not started by the campaign coordinator." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          state = json.loads((Path('runs') / os.environ['RUN_KEY'] / 'CAMPAIGN_STATE.json').read_text(encoding='utf-8'))
+          progress_path = Path('runs') / os.environ['RUN_KEY'] / 'LOCATION_CATEGORY_PROGRESS.json'
+          progress = json.loads(progress_path.read_text(encoding='utf-8')) if progress_path.is_file() else {}
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('## Lead-hunt campaign checkpoint\n\n')
+              summary.write(f"- Status: **{state['status']}**\n")
+              summary.write(f"- Queries: **{progress.get('successful', 0)} successful / {state['total_queries']} total**\n")
+              summary.write(f"- Pending: **{progress.get('pending', state['total_queries'])}**\n")
+              summary.write(f"- Completed batches: **{state.get('completed_batches', 0)}**\n")
+              summary.write(f"- Batch size: **{state['queries_per_batch']} queries**; max **{state['max_sites_per_query']} sites/query**\n")
+              summary.write(f"- Batch attempts: **{state.get('total_batch_attempts', 0)}**\n")
+              if state.get('pause_reason'):
+                  summary.write(f"- Paused because: {state['pause_reason']}\n")
+              if state['status'] == 'complete':
+                  summary.write('\n**Campaign complete.**\n')
+              elif state['status'] == 'paused':
+                  summary.write('\nResume this run key after inspecting the checkpoint and diagnostics.\n')
+          PY
+
+      - name: Commit campaign checkpoint
+        if: always()
+        env:
+          RUN_KEY: ${{ steps.manual.outputs.run_key || steps.completion.outputs.run_key }}
+          TARGET_REF: ${{ steps.target.outputs.ref }}
+        run: |
+          if [[ -z "$RUN_KEY" || ! -f "runs/$RUN_KEY/CAMPAIGN_STATE.json" ]]; then
+            echo "No campaign checkpoint to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "runs/$RUN_KEY/CAMPAIGN_STATE.json"
+          if ! git diff --cached --quiet; then
+            git commit -m "Update lead-hunt campaign checkpoint: $RUN_KEY"
+            git push origin "HEAD:${TARGET_REF}"
+          else
+            echo "Campaign checkpoint is already committed."
+          fi
+
+      - name: Dispatch next bounded lead-hunt batch
+        if: always() && (steps.manual.outputs.dispatch == 'true' || steps.completion.outputs.dispatch == 'true')
+        env:
+          RUN_KEY: ${{ steps.manual.outputs.run_key || steps.completion.outputs.run_key }}
+          TARGET_REF: ${{ steps.target.outputs.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python tools/lead_hunt_campaign.py --mode dispatch --run-key "$RUN_KEY" \
+            --ref "$TARGET_REF" --dispatch-to-github

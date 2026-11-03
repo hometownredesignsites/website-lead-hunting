@@ -1,4 +1,5 @@
 name: ChatGPT website lead hunt
+run-name: ChatGPT website lead hunt ${{ inputs.run_key }} campaign=${{ inputs.campaign_key }} batch=${{ inputs.campaign_batch }} attempt=${{ inputs.campaign_attempt }}
 
 on:
   workflow_dispatch:
@@ -42,6 +43,21 @@ on:
         required: true
         default: false
         type: boolean
+      campaign_key:
+        description: "Managed by the campaign coordinator; leave blank for a standalone batch"
+        required: false
+        default: ""
+        type: string
+      campaign_batch:
+        description: "Managed by the campaign coordinator"
+        required: false
+        default: "0"
+        type: string
+      campaign_attempt:
+        description: "Managed by the campaign coordinator"
+        required: false
+        default: "0"
+        type: string
 
 permissions:
   contents: write
@@ -96,9 +112,26 @@ jobs:
           MAX_QUERIES: ${{ inputs.max_queries }}
           MAX_SITES_PER_QUERY: ${{ inputs.max_sites_per_query }}
           CAPTURE_GOOGLE_EVIDENCE: ${{ inputs.capture_google_evidence }}
+          CAMPAIGN_KEY: ${{ inputs.campaign_key }}
+          CAMPAIGN_BATCH: ${{ inputs.campaign_batch }}
+          CAMPAIGN_ATTEMPT: ${{ inputs.campaign_attempt }}
         run: |
           if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "run_key must contain only letters, digits, dot, underscore, and hyphen" >&2
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n "$CAMPAIGN_KEY" ]]; then
+            if ! [[ "$CAMPAIGN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || \
+               [[ "$CAMPAIGN_KEY" != "$RUN_KEY" ]] || \
+               ! [[ "$CAMPAIGN_BATCH" =~ ^[1-9][0-9]*$ ]] || \
+               ! [[ "$CAMPAIGN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Campaign metadata is invalid or does not match run_key" >&2
+              echo "exit_code=1" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          elif [[ "$CAMPAIGN_BATCH" != "0" || "$CAMPAIGN_ATTEMPT" != "0" ]]; then
+            echo "Campaign batch and attempt require a campaign_key" >&2
             echo "exit_code=1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
