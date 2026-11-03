@@ -1,19 +1,30 @@
 name: Lead-hunt campaign coordinator
-run-name: Lead-hunt campaign ${{ inputs.run_key || github.event.workflow_run.display_title || 'completion handler' }}
+run-name: Lead-hunt campaign ${{ inputs.run_key || 'completion handler' }}
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Start a new campaign or resume a paused campaign
+        description: Start, resume, or internally checkpoint a campaign
         required: true
         type: choice
         options:
           - start
           - resume
+          - after-run
       run_key:
-        description: Stable key for this campaign and its durable run records
+        description: Stable campaign key; used by after-run callback too
         required: true
+        type: string
+      child_run_id:
+        description: Internal callback: completed lead-hunt Actions run ID
+        required: false
+        default: ""
+        type: string
+      child_conclusion:
+        description: Internal callback: final lead-hunt job result
+        required: false
+        default: ""
         type: string
       region:
         description: Market label used in the reports (used when starting)
@@ -59,12 +70,6 @@ on:
         default: false
         type: boolean
 
-  workflow_run:
-    workflows:
-      - ChatGPT website lead hunt
-    types:
-      - completed
-
 permissions:
   actions: write
   contents: write
@@ -72,7 +77,7 @@ permissions:
 # The coordinator only holds this shared lock while changing a checkpoint or
 # dispatching the next bounded batch. The six-hour browser job remains separate.
 concurrency:
-  group: website-lead-hunt-${{ github.repository }}-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
   queue: max
   cancel-in-progress: false
 
@@ -84,15 +89,9 @@ jobs:
       - name: Resolve target branch
         id: target
         env:
-          EVENT_NAME: ${{ github.event_name }}
           MANUAL_REF: ${{ github.ref_name }}
-          COMPLETED_REF: ${{ github.event.workflow_run.head_branch }}
         run: |
-          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
-            TARGET_REF="$COMPLETED_REF"
-          else
-            TARGET_REF="$MANUAL_REF"
-          fi
+          TARGET_REF="$MANUAL_REF"
           if [[ -z "$TARGET_REF" ]] || ! git check-ref-format --branch "$TARGET_REF" >/dev/null; then
             echo "Could not resolve a valid target branch" >&2
             exit 1
@@ -106,7 +105,7 @@ jobs:
 
       - name: Start or resume a campaign
         id: manual
-        if: github.event_name == 'workflow_dispatch'
+        if: inputs.mode == 'start' || inputs.mode == 'resume'
         env:
           MODE: ${{ inputs.mode }}
           RUN_KEY: ${{ inputs.run_key }}
@@ -128,14 +127,19 @@ jobs:
 
       - name: Process completed lead-hunt batch
         id: completion
-        if: github.event_name == 'workflow_run'
+        if: inputs.mode == 'after-run'
         env:
           TARGET_REF: ${{ steps.target.outputs.ref }}
+          RUN_KEY: ${{ inputs.run_key }}
+          CHILD_RUN_ID: ${{ inputs.child_run_id }}
+          CHILD_CONCLUSION: ${{ inputs.child_conclusion }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python tools/lead_hunt_campaign.py --mode after-run \
-            --event-file "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
+            --run-key "$RUN_KEY" --child-run-id "$CHILD_RUN_ID" \
+            --child-conclusion "$CHILD_CONCLUSION" --ref "$TARGET_REF" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Write campaign status summary
         if: always()

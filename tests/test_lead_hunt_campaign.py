@@ -66,7 +66,7 @@ class LeadHuntCampaignTests(unittest.TestCase):
 
     def test_workflow_run_api_record_supplies_campaign_display_title(self) -> None:
         from io import BytesIO
-        response = BytesIO(json.dumps({"name": "ChatGPT website lead hunt",
+        response = BytesIO(json.dumps({"name": "ChatGPT website lead hunt campaign-x campaign=campaign-x batch=1 attempt=1",
             "event": "workflow_dispatch", "path": ".github/workflows/lead-hunt.yml@refs/heads/git-chatgpt", "display_title":
             "ChatGPT website lead hunt campaign-x campaign=campaign-x batch=1 attempt=1"}).encode())
         response.status = 200
@@ -127,8 +127,11 @@ class LeadHuntCampaignTests(unittest.TestCase):
     def test_campaign_workflow_dispatches_and_handles_completion(self) -> None:
         workflow = (Path(__file__).parents[1] / ".github/workflows/lead-hunt-campaign.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("workflow_run:", workflow)
-        self.assertIn("workflows:\n      - ChatGPT website lead hunt", workflow)
+        self.assertNotIn("workflow_run:", workflow)
+        self.assertIn("- after-run", workflow)
+        lead_hunt = (Path(__file__).parents[1] / ".github/workflows/lead-hunt.yml").read_text(encoding="utf-8")
+        self.assertIn("notify_campaign:", lead_hunt)
+        self.assertIn('mode:"after-run"', lead_hunt)
         self.assertIn("--dispatch-to-github", workflow)
 
 

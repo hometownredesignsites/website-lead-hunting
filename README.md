@@ -33,7 +33,7 @@ flowchart TD
     F --> G[Validate ledgers and write run summary]
     G --> H[Commit text records + progress to git-chatgpt]
     F --> I[Upload lead-hunt artifact<br/>screenshots + run evidence; 7 days]
-    H --> J[Completion event checks progress<br/>and commits campaign checkpoint]
+    H --> J[Completion callback checks progress<br/>and commits campaign checkpoint]
     J --> K{All queries complete?}
     K -- no; no challenge --> D
     K -- challenge / cancelled / retries spent --> L[Pause campaign for inspection]
@@ -58,7 +58,7 @@ flowchart TD
     W --> AA[Next blank-ID batch can resume<br/>after this batch commits]
 ```
 
-The campaign controller and the child lead-hunt job use the same per-branch Actions concurrency lock. A controller run holds it only long enough to commit state and dispatch the next child; the six-hour Xvfb run remains a separate workflow. `workflow_run` completion events are deduplicated by workflow-run ID, and campaign identity is read from the completed run's REST record rather than relying on fields omitted from the event payload. GitHub Actions starts a dispatched workflow with `GITHUB_TOKEN`; no personal token secret is required.
+The campaign controller and the child lead-hunt job use the same per-branch Actions concurrency lock. A controller run holds it only long enough to commit state and dispatch the next child; the six-hour Xvfb run remains a separate workflow. After the lead-hunt job finishes, a small callback job dispatches the coordinator with `GITHUB_TOKEN`; the coordinator reads the completed run's REST record and committed progress before advancing the checkpoint. This explicit callback is needed because GitHub suppresses most follow-on events from `GITHUB_TOKEN`, while `workflow_dispatch` is an allowed exception. The callback includes the final lead-hunt job result, so a failed or cancelled child is recorded even though the callback runs before the enclosing workflow's final status is set. No personal token secret is required.
 
 **What starts each stage:** use the campaign coordinator for hands-off sequential lead-hunt batches, or start **Actions → ChatGPT website lead hunt** directly for a one-off bounded run. The visual batch is started from **Actions → ChatGPT visual review batch** after the lead-hunt run has committed its ledger. Enter its run key and Actions run ID; leave candidate IDs blank for automatic selection, or provide IDs for a targeted batch. The review workflow downloads screenshots from that lead-hunt run's artifact; it never falls back to screenshots in the repository. The retry scheduler checks due retry records every five minutes and dispatches those reviews automatically.
 
