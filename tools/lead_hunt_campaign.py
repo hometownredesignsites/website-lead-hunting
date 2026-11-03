@@ -136,7 +136,12 @@ def event_campaign(event: dict, run_details: dict | None = None) -> tuple[str, i
     # workflow-run resource does, so callers should enrich the webhook object.
     if run_details:
         run = {**run, **run_details}
-    if run.get("name") != "ChatGPT website lead hunt" or run.get("event") != "workflow_dispatch":
+    run_name = str(run.get("name") or "")
+    workflow_path = str(run.get("path") or "").split("@", 1)[0]
+    if (run.get("event") != "workflow_dispatch"
+            or not (run_name == "ChatGPT website lead hunt"
+                    or run_name.startswith("ChatGPT website lead hunt "))
+            or (workflow_path and workflow_path != ".github/workflows/lead-hunt.yml")):
         return None
     title = str(run.get("display_title") or "")
     match = re.search(r"\bcampaign=([A-Za-z0-9][A-Za-z0-9._-]{0,79})\s+batch=(\d+)\s+attempt=(\d+)\b", title)
@@ -332,8 +337,10 @@ def main() -> int:
             raise ValueError("--event-file is required after a lead-hunt workflow run")
         event = json.loads(args.event_file.read_text(encoding="utf-8-sig"))
         webhook_run = event.get("workflow_run") or {}
-        if (webhook_run.get("name") != "ChatGPT website lead hunt"
-                or webhook_run.get("event") != "workflow_dispatch"):
+        webhook_name = str(webhook_run.get("name") or "")
+        if (webhook_run.get("event") != "workflow_dispatch"
+                or not (webhook_name == "ChatGPT website lead hunt"
+                        or webhook_name.startswith("ChatGPT website lead hunt "))):
             print("Lead-hunt run is not a workflow_dispatch campaign batch; no campaign state changed.")
             write_outputs(args.github_output, {"run_key": "", "status": "ignored"}, False)
             return 0
