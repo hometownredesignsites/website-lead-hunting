@@ -15,7 +15,7 @@ MAX_CANDIDATES = 20
 def parse_candidate_ids(raw: str) -> list[str]:
     values = [item.strip() for item in re.split(r"[\s,;]+", raw) if item.strip()]
     if not values:
-        raise ValueError("Provide at least one candidate ID (comma- or newline-separated).")
+        return []
     if len(values) > MAX_CANDIDATES:
         raise ValueError(f"At most {MAX_CANDIDATES} candidates can be reviewed in one batch.")
     invalid = [value for value in values if not CANDIDATE_ID.fullmatch(value)]
@@ -24,6 +24,50 @@ def parse_candidate_ids(raw: str) -> list[str]:
     if len(set(values)) != len(values):
         raise ValueError("Candidate IDs must be unique within a batch.")
     return values
+
+
+def has_valid_visual_score(row: dict) -> bool:
+    review = row.get("chatgpt_visual_review")
+    if not isinstance(review, dict) or review.get("status") != "passed":
+        return False
+    candidate_id = row.get("candidate_id")
+    return (
+        review.get("candidate_id") == candidate_id
+        and isinstance(review.get("visual_opportunity_score"), (int, float))
+        and review.get("visual_verdict") in {"high", "medium", "pass"}
+        and isinstance(review.get("confidence"), str)
+        and any(isinstance(review.get(key), list) and review[key]
+                for key in ("major_issues", "desktop_top_observations", "desktop_observations"))
+    )
+
+
+def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES) -> tuple[list[str], int]:
+    ledger_path = run_dir / "CANDIDATE_LEDGER.jsonl"
+    if not ledger_path.is_file():
+        raise ValueError(f"Candidate ledger not found: {ledger_path}")
+    eligible = []
+    for line_number, line in enumerate(ledger_path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in {ledger_path}:{line_number}: {exc}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"Expected a JSON object in {ledger_path}:{line_number}")
+        candidate_id = row.get("candidate_id")
+        if (not isinstance(candidate_id, str) or not CANDIDATE_ID.fullmatch(candidate_id)
+                or row.get("site_check_status") != "loaded"
+                or row.get("automated_priority") not in {"high", "medium"}
+                or has_valid_visual_score(row)):
+            continue
+        last_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
+        # Recoverable and permanent failures have their own durable retry/failure
+        # state; fresh auto-selection must not bypass that accounting.
+        if last_attempt.get("status") in {"retry-needed", "failed"}:
+            continue
+        eligible.append(candidate_id)
+    return eligible[:limit], len(eligible)
 
 
 def validate_scheduled_retry(run_dir: Path, candidate_ids: list[str], retry_round: int,
@@ -67,6 +111,13 @@ def main() -> int:
     parser.add_argument("--source-run-id", default="")
     args = parser.parse_args()
     ids = parse_candidate_ids(args.candidate_ids)
+    eligible_count = None
+    if not ids:
+        if not args.run_dir:
+            raise ValueError("Automatic selection requires --run-dir")
+        ids, eligible_count = select_eligible_candidates(args.run_dir)
+        if not ids:
+            raise ValueError("No eligible high/medium candidates without a valid visual score were found.")
     if args.retry_request_id:
         if not args.run_dir or args.retry_round < 1:
             raise ValueError("A scheduled retry requires --run-dir and a positive --retry-round")
@@ -79,7 +130,16 @@ def main() -> int:
         with args.github_output.open("a", encoding="utf-8") as stream:
             stream.write(f"matrix={serialized_matrix}\n")
             stream.write(f"candidate_ids={serialized_ids}\n")
-    print(json.dumps({"matrix": matrix, "candidate_ids": ids}, indent=2))
+    plan = {"matrix": matrix, "candidate_ids": ids, "selected_count": len(ids),
+            "eligible_count": eligible_count,
+            "remaining_eligible": max(0, eligible_count - len(ids)) if eligible_count is not None else None}
+    print(json.dumps(plan, indent=2))
+    if args.github_output:
+        with args.github_output.open("a", encoding="utf-8") as stream:
+            stream.write(f"selected_count={len(ids)}\n")
+            stream.write(f"eligible_count={eligible_count if eligible_count is not None else len(ids)}\n")
+            stream.write(f"remaining_eligible={max(0, eligible_count - len(ids)) if eligible_count is not None else 0}\n")
+            stream.write(f"selection_mode={'automatic' if eligible_count is not None else 'manual'}\n")
     return 0
 
 

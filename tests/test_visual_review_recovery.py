@@ -137,6 +137,9 @@ class VisualReviewRecoveryTests(unittest.TestCase):
             )
             row = json.loads(ledger.read_text(encoding="utf-8").strip())
         self.assertEqual(result["statuses"], {"retry-needed": 1})
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["retry_needed"], 1)
+        self.assertEqual(result["candidate_ids_by_status"]["retry-needed"], ["candidate-1"])
         self.assertEqual(row["chatgpt_visual_review_last_attempt"]["status"], "retry-needed")
         self.assertEqual(row["chatgpt_visual_review_last_attempt"]["failure_class"],
                          "review_artifact_missing_or_run_interrupted")

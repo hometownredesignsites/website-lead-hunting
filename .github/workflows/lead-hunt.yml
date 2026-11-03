@@ -26,7 +26,7 @@ on:
           - "10"
           - "20"
       max_sites_per_query:
-        description: "Direct business websites to assess per query (1-8)"
+        description: "Direct business websites to assess per query (1-10)"
         required: true
         default: "3"
         type: choice

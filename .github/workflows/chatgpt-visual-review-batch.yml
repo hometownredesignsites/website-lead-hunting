@@ -12,8 +12,9 @@ on:
         required: true
         type: string
       review_candidate_ids:
-        description: "Candidate IDs separated by commas or newlines (up to 20)"
-        required: true
+        description: "Optional: candidate IDs separated by commas or newlines. Leave blank to automatically select the next eligible high/medium candidates (up to 20)."
+        required: false
+        default: ""
         type: string
       automatic_retry_round:
         description: "Managed by the retry scheduler; leave at 0 for a manual review"
@@ -100,6 +101,25 @@ jobs:
             --retry-request-id "$RETRY_REQUEST_ID" \
             --source-run-id "$SOURCE_RUN_ID" \
             --github-output "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          values = {}
+          for line in Path(os.environ["GITHUB_OUTPUT"]).read_text(encoding="utf-8").splitlines():
+              if "=" in line:
+                  key, value = line.split("=", 1)
+                  values[key] = value
+          ids = json.loads(values["candidate_ids"])
+          mode = values.get("selection_mode", "manual")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Visual review batch plan\n\n")
+              summary.write(f"- Selection: **{mode}**\n")
+              summary.write(f"- Candidates dispatched: **{len(ids)}** (maximum 20)\n")
+              if mode == "automatic":
+                  summary.write(f"- Eligible candidates at planning time: **{values.get('eligible_count', 'unknown')}**\n")
+                  summary.write(f"- Remaining after this batch: **{values.get('remaining_eligible', 'unknown')}**\n")
+              summary.write("\nEach batch is merged and committed before a later batch is started. Leave candidate IDs blank on the next manual dispatch to resume from the committed ledger.\n")
+          PY
 
   review_site:
     needs: plan
@@ -380,6 +400,34 @@ jobs:
           if [[ -f "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" ]]; then
             python tools/export_high_medium_candidates.py --run-dir "runs/$RUN_KEY"
           fi
+
+      - name: Write partial-results report
+        if: always()
+        env:
+          RUN_KEY: ${{ needs.plan.outputs.run_key }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          summary_path = Path("runs") / os.environ["RUN_KEY"] / "CHATGPT_VISUAL_REVIEW_BATCH.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as report:
+              report.write("\n## Visual review results\n\n")
+              if not summary_path.is_file():
+                  report.write("The batch merge did not produce a durable results summary. Check the merge job diagnostics.\n")
+                  raise SystemExit(0)
+              data = json.loads(summary_path.read_text(encoding="utf-8"))
+              statuses = data.get("statuses", {})
+              passed = int(statuses.get("passed", 0))
+              retry = int(statuses.get("retry-needed", 0))
+              failed = int(statuses.get("failed", 0))
+              total = int(data.get("total", passed + retry + failed))
+              report.write(f"**{passed}/{total} passed · {retry} retry-needed · {failed} failed**\n\n")
+              report.write("A green workflow means results were recorded and committed; it does not mean every candidate passed. Candidate-level outcomes are authoritative in the ledger.\n\n")
+              report.write("| Status | Count | Candidate IDs |\n|---|---:|---|\n")
+              for status in ("passed", "retry-needed", "failed"):
+                  ids = data.get("candidate_ids_by_status", {}).get(status, [])
+                  report.write(f"| {status} | {statuses.get(status, 0)} | {', '.join(ids) if ids else '—'} |\n")
+          PY
 
       - name: Commit durable scorecards and run summary
         if: always()

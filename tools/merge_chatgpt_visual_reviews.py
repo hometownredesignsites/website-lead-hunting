@@ -192,18 +192,23 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
     # candidate ledger that downstream users see, even if envelope metadata
     # was incomplete or conflicted with an existing accepted scorecard.
     statuses: dict[str, int] = {}
+    candidate_ids_by_status: dict[str, list[str]] = {"passed": [], "retry-needed": [], "failed": []}
     for candidate_id in candidate_ids:
         durable_attempt = by_id[candidate_id].get("chatgpt_visual_review_last_attempt") or {}
         status = durable_attempt.get("status", "retry-needed")
         if status not in {"passed", "failed", "retry-needed"}:
             status = "failed"
         statuses[status] = statuses.get(status, 0) + 1
+        candidate_ids_by_status[status].append(candidate_id)
     return {
         "candidate_ids": candidate_ids,
+        "candidate_ids_by_status": candidate_ids_by_status,
+        "total": len(candidate_ids),
         "source_lead_hunt_run_id": str(source_run_id),
         "review_workflow_run_id": str(review_run_id),
         "statuses": statuses,
         "successful": statuses.get("passed", 0),
+        "retry_needed": statuses.get("retry-needed", 0),
         "failed": statuses.get("failed", 0),
         "updated_at": now,
     }
