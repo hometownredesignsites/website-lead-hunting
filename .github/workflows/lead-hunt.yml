@@ -1,5 +1,5 @@
 name: ChatGPT website lead hunt
-run-name: ChatGPT website lead hunt ${{ inputs.run_key }} campaign=${{ inputs.campaign_key }} batch=${{ inputs.campaign_batch }} attempt=${{ inputs.campaign_attempt }}
+run-name: ChatGPT website lead hunt ${{ inputs.run_key }} campaign=${{ inputs.campaign_key || inputs.city_campaign_key }} batch=${{ inputs.campaign_batch }} attempt=${{ inputs.campaign_attempt }}
 
 on:
   workflow_dispatch:
@@ -58,6 +58,16 @@ on:
         required: false
         default: "0"
         type: string
+      city_campaign_key:
+        description: "Managed by the city-upload campaign coordinator"
+        required: false
+        default: ""
+        type: string
+      city_campaign_category_index:
+        description: "One-based business type row from the campaign category snapshot"
+        required: false
+        default: "0"
+        type: string
 
 permissions:
   actions: write
@@ -92,6 +102,18 @@ jobs:
 
       - name: Load configuration and checkpoints from private repository
         run: python tools/private_results.py copy-in --private-repo private-results
+
+      - name: Prepare this city campaign category and city snapshot
+        if: inputs.city_campaign_key != ''
+        env:
+          CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
+          CITY_CATEGORY_INDEX: ${{ inputs.city_campaign_category_index }}
+          RUN_KEY: ${{ inputs.run_key }}
+        run: |
+          python tools/prepare_city_campaign_inputs.py \
+            --campaign-run-dir "runs/$CITY_CAMPAIGN_KEY" \
+            --category-index "$CITY_CATEGORY_INDEX" \
+            --output-dir "work/city-campaign/$RUN_KEY"
 
       - name: Install pinned Python dependencies
         run: |
@@ -128,6 +150,8 @@ jobs:
           CAMPAIGN_KEY: ${{ inputs.campaign_key }}
           CAMPAIGN_BATCH: ${{ inputs.campaign_batch }}
           CAMPAIGN_ATTEMPT: ${{ inputs.campaign_attempt }}
+          CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
+          CITY_CATEGORY_INDEX: ${{ inputs.city_campaign_category_index }}
         run: |
           if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "run_key must contain only letters, digits, dot, underscore, and hyphen" >&2
@@ -148,6 +172,27 @@ jobs:
             echo "exit_code=1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          categories_csv="config/business_categories.csv"
+          cities_csv="config/cities.csv"
+          if [[ -n "$CITY_CAMPAIGN_KEY" ]]; then
+            if ! [[ "$CITY_CAMPAIGN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || \
+               ! [[ "$CITY_CATEGORY_INDEX" =~ ^[1-9][0-9]*$ ]]; then
+              echo "City campaign metadata is invalid" >&2
+              echo "exit_code=1" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            categories_csv="work/city-campaign/$RUN_KEY/business_categories.csv"
+            cities_csv="work/city-campaign/$RUN_KEY/cities.csv"
+            if [[ ! -f "$categories_csv" || ! -f "$cities_csv" ]]; then
+              echo "Prepared city campaign inputs are missing" >&2
+              echo "exit_code=1" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          elif [[ "$CITY_CATEGORY_INDEX" != "0" ]]; then
+            echo "city_campaign_category_index requires city_campaign_key" >&2
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           mkdir -p runs
           capture_args=()
           if [[ "$CAPTURE_GOOGLE_EVIDENCE" == "true" ]]; then
@@ -157,8 +202,8 @@ jobs:
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python tools/lead_hunt.py \
               --engine chatgpt \
-              --categories-csv config/business_categories.csv \
-              --cities-csv config/cities.csv \
+              --categories-csv "$categories_csv" \
+              --cities-csv "$cities_csv" \
               --region "$REGION" \
               --state-dir "runs/$RUN_KEY" \
               --max-queries "$MAX_QUERIES" \
@@ -267,4 +312,45 @@ jobs:
             sleep 5
           done
           echo "Campaign completion callback could not be dispatched after three attempts." >&2
+          exit 1
+
+  notify_city_campaign:
+    needs: hunt
+    if: always() && inputs.city_campaign_key != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch city campaign checkpoint after lead hunt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_REF: ${{ github.ref_name }}
+          CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
+          CHILD_RUN_ID: ${{ github.run_id }}
+          CHILD_CONCLUSION: ${{ needs.hunt.result }}
+        run: |
+          payload=$(jq -n \
+            --arg ref "$TARGET_REF" \
+            --arg campaign_key "$CITY_CAMPAIGN_KEY" \
+            --arg child_run_id "$CHILD_RUN_ID" \
+            --arg child_conclusion "$CHILD_CONCLUSION" \
+            '{ref:$ref,inputs:{mode:"after-lead-hunt",campaign_key:$campaign_key,child_run_id:$child_run_id,child_conclusion:$child_conclusion}}')
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/city-upload-campaign.yml/dispatches" \
+              --data "$payload"; then
+              echo "City campaign notified for lead-hunt run $CHILD_RUN_ID."
+              exit 0
+            fi
+            echo "City campaign callback attempt $attempt failed." >&2
+            sleep 5
+          done
+          echo "City campaign callback could not be dispatched after three attempts." >&2
           exit 1

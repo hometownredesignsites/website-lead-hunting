@@ -10,67 +10,59 @@ Actions logs and artifacts remain associated with the public repository. They ma
 
 ## Inputs and batch size
 
-The workflow reads two CSVs from the private operations repository (`config/`):
+The orchestration uses two CSVs with different visibility and owners:
 
-- `website-lead-hunting-operations/config/business_categories.csv` — one `category` column.
-- `website-lead-hunting-operations/config/cities.csv` — one `city` column; values containing commas should be quoted.
+- `website-lead-hunting-operations/config/business_categories.csv` — private source of business types; requires a `category` column. The imported category catalog preserves its other source columns as metadata.
+- Public `config/cities.csv` — upload the city list to this path on the `git-chatgpt` branch. It must have one `city` column and no more than 20 rows. Quote names containing commas. A starter file is [config/cities.example.csv](config/cities.example.csv).
 
-The private operations repo is the source of truth for the category and city lists. Update those CSVs there before a market run. The planning step prints the Cartesian product and the current batch size before research begins.
+Uploading or committing `config/cities.csv` starts the city-upload workflow. That city list is public and remains in public Git history. The workflow snapshots both inputs into the private operations repository before it dispatches work, so later city-list edits do not change an active campaign. A new commit to the city CSV starts a new campaign. The category catalog remains private and does not trigger Actions when it changes.
 
-For one bounded lead-hunt run, open **Actions → ChatGPT website lead hunt → Run workflow** on the `git-chatgpt` branch. Use a stable `run_key` to resume the same inputs. A changed category/city set requires a new key. Run records and CSV inputs are committed to the private operations repository; the public repository contains workflow and runner code. Each dispatch processes up to 20 pending category/city prompts and assesses up to 10 sites per prompt. Lead-hunt prompts run sequentially; this stage has no schedule or parallel query fan-out. It uses a six-hour job timeout.
+The campaign runs one business type at a time against all uploaded cities (up to 20). With 168 business types and 20 cities, the campaign contains up to 3,360 searches. For each business type it starts one lead-hunt job with at most 20 sequential queries and the existing six-hour timeout. The job runs the script-based technical checks and captures desktop/mobile images. It then automatically starts ChatGPT visual assessments for eligible high/medium candidates from that category's committed ledger, using the screenshots from the lead-hunt run artifact. Visual jobs keep the current maximum parallelism of two and process up to 20 candidates per review dispatch.
 
-For an automatically checkpointed campaign, use **Actions → Lead-hunt campaign coordinator → Run workflow** and choose `start`. Give the campaign a new `run_key`, then choose a batch size, sites-per-query limit, and retry allowance. The coordinator fingerprints the committed CSVs, creates `runs/<run_key>/CAMPAIGN_STATE.json`, and dispatches one regular lead-hunt workflow run. Each child run commits its query/candidate ledger and progress. On completion, the coordinator reads the run metadata and committed progress, checkpoints the campaign, then dispatches the next bounded batch. At 20 queries per batch, 3,200 queries take at least 160 child runs; the coordinator removes the need for 160 manual dispatches while keeping the browser jobs below the six-hour timeout. Start at 2–5 queries per batch, measure run duration and successful-query rate, then raise the batch size gradually.
+After a visual batch, recoverable failures enter the existing retry queue and are retried about 30 minutes later in a fresh job, for up to two delayed rounds. The campaign waits while any candidate has a pending retry. Passed, permanently failed, or exhausted candidates are recorded in the private ledger; one candidate's visual failure does not stop the category or campaign. Once all eligible candidates have a terminal visual outcome, the coordinator checkpoints that category and dispatches the next business type. The workflow polls checkpoints and retry state every five minutes.
 
-The campaign stops as `complete` when all CSV combinations have a successful terminal record. It retries a failed batch at most the configured number of times, but pauses without retrying when Google/ChatGPT reports a challenge or when the child run is cancelled. It also pauses after its retry allowance is exhausted. To continue a paused campaign, run **Lead-hunt campaign coordinator** again with mode `resume` and the same `run_key`, after inspecting the diagnostics and resolving any challenge. Campaigns require the original committed CSV content; a fingerprint mismatch is rejected. `CAMPAIGN_STATE.json` records the batch/attempt numbers, progress, run IDs, and pause reason, so completed batches remain checkpointed in Git if a later batch is interrupted.
+If a lead-hunt job is blocked, cancelled, or does not finish all cities successfully, the campaign pauses for inspection instead of silently skipping that category. Use **Actions → City-upload lead-hunt and visual-review campaign → Run workflow**, choose `resume`, and provide its campaign key after resolving the problem. The campaign key is `city-<12-character upload commit SHA>` and is printed in the workflow run name and summary. Checkpoints and category snapshots live in the private operations repository. Each lead-hunt workflow's screenshots and diagnostics remain in the public Actions artifact for seven days; scorecards and candidate records are durable private text data.
 
 `Capture Google evidence` is an optional comparison pass that stores raw Google result snippets and reported counts beside ChatGPT's results. It is off by default. Google evidence extraction does not visit or independently assess every Google result.
 
 ## Workflow map
 
-The campaign coordinator chains bounded lead-hunt runs; standalone lead hunts and visual reviews can still be started manually. Only the visual-review retry scheduler runs on a schedule. The diagram shows what persists in the private results repository, what remains in public-repository Actions artifacts, and where a later campaign batch resumes.
+The city-upload coordinator chains discovery, script checks, visual scoring, and any delayed visual retries for each business type before starting the next one. Standalone lead hunts and visual reviews remain available for one-off work. The diagram shows the private checkpoints and durable scorecards, the public screenshot artifacts, and the automatic progression point.
 
 ```mermaid
 flowchart TD
-    A[Committed config CSVs<br/>categories × cities] --> B[Start campaign<br/>or run one standalone batch]
-    B --> C[Campaign state checkpoint<br/>CSV fingerprints + pending batch]
-    C --> D[Actions: ChatGPT website lead hunt<br/>one bounded batch; up to 20 queries]
-    D --> E[ChatGPT research under Xvfb<br/>one query at a time]
-    E --> F[Visit direct candidate sites<br/>technical checks + desktop/mobile screenshots]
-    F --> G[Validate ledgers and write run summary]
-    G --> H[Commit text records + progress to private operations repo]
-    F --> I[Upload lead-hunt artifact<br/>screenshots + run evidence; 7 days]
-    H --> J[Completion callback checks progress<br/>and commits campaign checkpoint]
-    J --> K{All queries complete?}
-    K -- no; no challenge --> D
-    K -- challenge / cancelled / retries spent --> L[Pause campaign for inspection]
-    K -- yes --> M[Campaign complete]
-    H --> N[Actions: ChatGPT visual review batch<br/>manual dispatch]
-    I --> N
-    N --> O{Candidate IDs supplied?}
-    O -- blank --> P[Select next eligible high/medium candidates<br/>from committed candidate ledger; max 20]
-    O -- supplied --> Q[Validate requested IDs<br/>max 20]
-    P --> R[One isolated review job per candidate<br/>max parallel 2; fail-fast off]
-    Q --> R
-    I --> R
-    R --> S[Prepare desktop top/mid<br/>and mobile top/mid crops]
-    S --> T[ChatGPT visual assessment<br/>Xvfb; in-session retry/follow-up]
-    T --> U[Upload per-candidate diagnostics<br/>7 days]
-    T --> V[Merge outcomes with candidate ledger]
-    V --> W[Write passed / retry-needed / failed report<br/>and commit checkpoint]
-    W --> X[High/medium CSV + durable scorecards]
-    W --> Y{Recoverable retry-needed?}
-    Y -- yes --> Z[Scheduled retry queue<br/>due after 30 minutes; up to 2 delayed rounds]
-    Z --> R
-    W --> AA[Next blank-ID batch can resume<br/>after this batch commits]
+    A[Upload config/cities.csv<br/>up to 20 cities; public] --> B[City-upload workflow starts campaign]
+    C[Private category catalog<br/>business_categories.csv] --> B
+    B --> D[Snapshot category + city CSVs<br/>and checkpoint privately]
+    D --> E[Current business type × uploaded cities]
+    E --> F[Lead-hunt job<br/>up to 20 sequential queries; 6h cap]
+    F --> G[Scripted page checks<br/>+ desktop/mobile screenshots]
+    G --> H[Commit ledgers and reports privately]
+    G --> I[Upload screenshots and diagnostics<br/>Actions artifact; 7 days]
+    H --> J{All city queries complete?}
+    J -- no / blocked / interrupted --> K[Pause for inspection and resume]
+    J -- yes --> L[Select eligible high/medium candidates]
+    I --> M[Download exact candidate screenshots]
+    L --> N[Fresh Xvfb/ChatGPT job per site<br/>max parallel 2; batches up to 20]
+    M --> N
+    N --> O[Four-image visual assessment]
+    O --> P[Merge scorecards + attempts privately]
+    O --> Q[Upload per-site diagnostics<br/>Actions artifact; 7 days]
+    P --> R{Recoverable visual failures?}
+    R -- yes --> S[Retry after 30 minutes<br/>fresh job; up to 2 rounds]
+    S --> P
+    R -- terminal --> T{More eligible sites?}
+    T -- yes --> L
+    T -- no --> U[Checkpoint category and start next type]
+    U --> E
+    U --> V[Campaign complete after final type]
 ```
 
-The campaign controller and child lead-hunt job share one repository-wide Actions concurrency lock, serializing writes to the private `main` branch across workflow refs. A controller run holds it only long enough to commit state and dispatch the next child; the six-hour Xvfb run remains a separate workflow. After the lead-hunt job finishes, a small callback job dispatches the coordinator with `GITHUB_TOKEN`; the coordinator reads the completed run's REST record and committed progress before advancing the checkpoint. This explicit callback is needed because GitHub suppresses most follow-on events from `GITHUB_TOKEN`, while `workflow_dispatch` is an allowed exception. The callback includes the final lead-hunt job result, so a failed or cancelled child is recorded even though the callback runs before the enclosing workflow's final status is set. The campaign checkpoint uses the `PRIVATE_RESULTS_TOKEN` secret to write the private results repository; `GITHUB_TOKEN` is used only to dispatch workflows and inspect public workflow runs.
+The city controller, lead-hunt jobs, visual-review merges, and retry scheduler share one repository-wide Actions concurrency lock, protecting writes to the private `main` branch. A controller run commits its checkpoint and dispatches the next child while holding the lock; the six-hour Xvfb lead-hunt job runs as a separate workflow. Completion callbacks use `GITHUB_TOKEN` and `workflow_dispatch`, which GitHub permits to start another workflow. `PRIVATE_RESULTS_TOKEN` checks out and commits the private operations repository. Screenshots cannot be stored as private-repository Actions artifacts: artifacts belong to the public repository running the job.
 
-**Campaign boundary:** the coordinator currently automates only the lead-hunt query batches. Visual review remains a separate workflow: after a lead-hunt batch, dispatch **ChatGPT visual review batch** with that batch's source run ID and run key. Each visual dispatch commits its scorecards before the next blank-ID batch is selected, but it does not automatically start that next batch. This keeps the two stages loosely coupled and lets a campaign resume independently, but a 3,200-query campaign still needs visual-review dispatches (and source artifacts must still be within their seven-day retention window). Do not treat lead-hunt campaign completion as completion of visual scoring.
+**What starts each stage:** commit/upload the city CSV at `config/cities.csv` on `git-chatgpt`. To resume a paused campaign, manually dispatch the city-upload workflow with mode `resume` and that campaign key. Standalone work can still be started from **Actions → ChatGPT website lead hunt** or **Actions → ChatGPT visual review batch**. A visual review always downloads screenshots from its source lead-hunt run artifact; it never falls back to screenshots in the repository.
 
-**What starts each stage:** use the campaign coordinator for hands-off sequential lead-hunt batches, or start **Actions → ChatGPT website lead hunt** directly for a one-off bounded run. The visual batch is started from **Actions → ChatGPT visual review batch** after the lead-hunt run has committed its ledger. Enter its run key and Actions run ID; leave candidate IDs blank for automatic selection, or provide IDs for a targeted batch. The review workflow downloads screenshots from that lead-hunt run's artifact; it never falls back to screenshots in the repository. The retry scheduler checks due retry records every five minutes and dispatches those reviews automatically.
-
-**Checkpoint and retention:** each visual batch merges and pushes its text results before it completes. The next batch uses that committed ledger, so completed visual scores are skipped. A blank-ID selection with zero eligible candidates succeeds with “No eligible candidates; batch complete” and skips review and merge jobs. Screenshots and per-candidate diagnostics remain in Actions artifacts for seven days; candidate ledgers, summaries, retry queues, and CSV exports are committed text records in the private operations repository. The repository-wide concurrency lock serializes lead hunts, visual-review merges, campaign checkpoints, and retry-queue writes before they update the private `main` branch. These three workflows use GitHub Actions `queue: max`, which allows up to 100 pending runs in the shared group instead of replacing the existing pending run; active work is not canceled. Scheduled retry polls share this queue and may wait behind other work.
+**Checkpoint and retention:** the campaign does not advance to the next business type until its script checks and eligible visual candidates have terminal outcomes, including any delayed retry rounds. Scorecards, candidate ledgers, reports, retry queues, campaign inputs, and checkpoints are durable text/data in the private operations repository. Screenshots and per-site diagnostics remain in public Actions artifacts for seven days. Workflows that write private state share `queue: max` and `cancel-in-progress: false`, preserving queued work and avoiding concurrent private-repository writes; scheduled polls may wait behind longer jobs.
 
 ## GitHub Actions runtime
 
@@ -111,7 +103,7 @@ The initial technical screen also records the homepage response status and final
 
 These checks are bounded for batch runtime, so the result includes scope limits and can report `partial` or `unknown`. They inspect the homepage plus a small set of relevant same-site pages, not every URL on a business's domain. Four-image ChatGPT visual assessment is a separate stage. It covers desktop top/mid and mobile top/mid views for visual judgments such as hero imagery, text contrast, layout, hierarchy, clutter, image presentation, and mobile usability. The visual score follows the rubric used by the successful browser run: high for a severe flaw or several major flaws, and medium for a meaningful opportunity such as dated styling, weak hierarchy, sparse or poor project photos, text-heavy layout, or confusing navigation. The screenshots must visibly support the score; this review does not make functional claims that require scripted checks.
 
-For a group of sites, use **Actions → ChatGPT visual review batch**. Enter the source lead-hunt run ID and run key. Leave candidate IDs blank to automatically select the next eligible high/medium candidates with no valid visual score, or provide IDs for a targeted batch. Auto-selection reads `runs/<run_key>/CANDIDATE_LEDGER.jsonl` from the private operations repository and requires `site_check_status=loaded` and `automated_priority=high` or `medium`. It skips a valid scorecard and candidates whose latest attempt is already `retry-needed` or `failed`; those outcomes remain under their retry or human-follow-up path. Each dispatch selects at most 20 candidates and runs at most two isolated Xvfb/ChatGPT jobs at once, with `fail-fast` disabled. After the batch is merged and committed, start another dispatch with the same run key and source run ID and leave candidate IDs blank; selection resumes from the committed candidate ledger, so completed scores are not lost or repeated. The plan report shows how many candidates were eligible and how many remain. If none are eligible, planning succeeds with a zero-candidate completion message and no review jobs run. The later batch is not automatically self-chained.
+For a standalone group of sites, use **Actions → ChatGPT visual review batch**. Enter the source lead-hunt run ID and run key. Leave candidate IDs blank to automatically select the next eligible high/medium candidates with no valid visual score, or provide IDs for a targeted batch. Auto-selection reads `runs/<run_key>/CANDIDATE_LEDGER.jsonl` from the private operations repository and requires `site_check_status=loaded` and `automated_priority=high` or `medium`. It skips a valid scorecard and candidates whose latest attempt is already `retry-needed` or `failed`; those outcomes remain under their retry or human-follow-up path. Each dispatch selects at most 20 candidates and runs at most two isolated Xvfb/ChatGPT jobs at once, with `fail-fast` disabled. After the batch is merged and committed, another standalone batch can be started with the same run key and source run ID; selection resumes from the committed candidate ledger. If none are eligible, planning succeeds with a zero-candidate completion message and no review jobs run. City-upload campaigns chain later visual batches automatically.
 
 Each site job uses the established runner behavior: one persistent browser profile for that candidate, with the runner's in-session retry and refresh behavior enabled. An empty or scoreless first response can receive a short text follow-up in the same chat before the attempt is classified. A permanent input or identity problem is `failed`; a recoverable problem that persists through the runner's retry is `retry-needed`; a validated scorecard is `passed`. Candidate failures do not stop other candidates or prevent the merge from saving their results. After all jobs finish, the workflow merges valid scorecards into their matching `chatgpt_visual_review` candidate-ledger fields, records attempt status and failure class, refreshes the run summary, and commits those text records to the private operations repository before that dispatch ends. The GitHub Actions step summary explicitly counts passed, retry-needed, and failed candidates and lists their IDs. A green workflow means statuses were recorded and committed; it does not mean every candidate passed. Detailed responses, screenshots, network logs, and runner diagnostics stay in the seven-day per-candidate artifacts. A workflow-level failure is reserved for execution problems that prevent the batch from being planned, merged, or committed. Recoverable candidates marked `retry-needed` are queued for up to two delayed automatic rounds; each delayed round starts a new job and browser profile. Run another blank-ID batch after those rounds if you want to resume with remaining unreviewed candidates.
 

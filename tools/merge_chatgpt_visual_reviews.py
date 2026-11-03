@@ -67,7 +67,8 @@ def artifact_records(results_dir: Path, expected_ids: list[str]) -> dict[str, di
 def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
           source_run_id: str, review_run_id: str,
           automatic_retry_round: int = 0, retry_request_id: str = "",
-          retry_delay_minutes: int = 30, max_automatic_retry_rounds: int = 2) -> dict:
+          retry_delay_minutes: int = 30, max_automatic_retry_rounds: int = 2,
+          city_campaign_key: str = "") -> dict:
     rows = read_jsonl(ledger_path)
     by_id: dict[str, dict] = {}
     for row in rows:
@@ -157,6 +158,8 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
             "last_status": status,
             "updated_at": now,
         })
+        if city_campaign_key:
+            entry["city_campaign_key"] = city_campaign_key
         if status == "passed":
             entry.update({"status": "resolved", "not_before": None,
                           "resolved_at": now, "last_dispatch_error": None})
@@ -223,6 +226,7 @@ def main() -> int:
     parser.add_argument("--review-run-id", required=True)
     parser.add_argument("--automatic-retry-round", type=int, default=0)
     parser.add_argument("--retry-request-id", default="")
+    parser.add_argument("--city-campaign-key", default="")
     parser.add_argument("--retry-delay-minutes", type=int, default=30)
     parser.add_argument("--max-automatic-retry-rounds", type=int, default=2)
     parser.add_argument("--output", type=Path, required=True)
@@ -237,7 +241,8 @@ def main() -> int:
     summary = merge(args.ledger, args.results_dir, candidate_ids,
                     args.source_run_id, args.review_run_id,
                     args.automatic_retry_round, args.retry_request_id,
-                    args.retry_delay_minutes, args.max_automatic_retry_rounds)
+                    args.retry_delay_minutes, args.max_automatic_retry_rounds,
+                    args.city_campaign_key)
     summary["automatic_retry_round"] = args.automatic_retry_round
     summary["retry_queue_file"] = str(args.ledger.parent / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json")
     args.output.parent.mkdir(parents=True, exist_ok=True)

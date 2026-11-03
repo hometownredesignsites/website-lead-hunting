@@ -4,6 +4,8 @@ __pycache__/
 venv/
 artifacts/
 tmp/
-config/
+config/*
+!config/cities.csv
+!config/cities.example.csv
 runs/
 .playwright-chatgpt-profile/

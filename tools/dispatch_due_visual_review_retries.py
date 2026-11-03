@@ -82,6 +82,7 @@ def dispatch_group(token: str, repository: str, ref: str, group: dict) -> None:
             "review_candidate_ids": ",".join(group["candidate_ids"]),
             "automatic_retry_round": str(group["automatic_retry_round"]),
             "retry_request_id": group["retry_request_id"],
+            "city_campaign_key": group.get("city_campaign_key", ""),
         },
     }
     status, _ = api_request(token, endpoint, payload)
@@ -152,12 +153,13 @@ def process(workspace: Path, repository: str, token: str, ref: str, *, dispatch_
                 continue
             key = (entry["run_key"], str(entry["source_lead_hunt_run_id"]),
                    int(entry["automatic_retry_round"]),
-                   entry.get("dispatch_request_id") if dispatch_ready else None)
+                   entry.get("dispatch_request_id") if dispatch_ready else None,
+                   entry.get("city_campaign_key", ""))
             due_groups.setdefault(key, []).append((queue_path, entry))
 
     processed_groups = 0
     for key, entries in sorted(due_groups.items()):
-        run_key, source_run_id, retry_round, existing_request_id = key
+        run_key, source_run_id, retry_round, existing_request_id, city_campaign_key = key
         entries.sort(key=lambda item: item[1]["candidate_id"])
         for start in range(0, len(entries), MAX_CANDIDATES_PER_DISPATCH):
             chunk = entries[start:start + MAX_CANDIDATES_PER_DISPATCH]
@@ -169,6 +171,7 @@ def process(workspace: Path, repository: str, token: str, ref: str, *, dispatch_
                 "automatic_retry_round": retry_round,
                 "candidate_ids": candidate_ids,
                 "retry_request_id": request_id,
+                "city_campaign_key": city_campaign_key,
             }
             if not dispatch_ready:
                 stamp = iso_now()

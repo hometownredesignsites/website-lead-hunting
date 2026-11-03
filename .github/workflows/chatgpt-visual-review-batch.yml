@@ -26,9 +26,14 @@ on:
         required: false
         default: ""
         type: string
+      city_campaign_key:
+        description: "Managed by the city-upload campaign coordinator"
+        required: false
+        default: ""
+        type: string
 
 permissions:
-  actions: read
+  actions: write
   contents: read
 
 # Share the repository-wide lock with every writer of the private operations repository.
@@ -49,6 +54,7 @@ jobs:
       source_run_id: ${{ steps.validate.outputs.source_run_id }}
       retry_round: ${{ steps.validate.outputs.retry_round }}
       retry_request_id: ${{ steps.validate.outputs.retry_request_id }}
+      city_campaign_key: ${{ steps.validate.outputs.city_campaign_key }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -73,6 +79,7 @@ jobs:
           REVIEW_SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
           AUTOMATIC_RETRY_ROUND: ${{ inputs.automatic_retry_round }}
           RETRY_REQUEST_ID: ${{ inputs.retry_request_id }}
+          CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
         run: |
           if ! [[ "$REVIEW_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "review_run_key contains invalid characters" >&2
@@ -95,10 +102,15 @@ jobs:
             echo "automatic retry round and request ID must be provided together" >&2
             exit 1
           fi
+          if [[ -n "$CITY_CAMPAIGN_KEY" ]] && ! [[ "$CITY_CAMPAIGN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+            echo "city_campaign_key contains invalid characters" >&2
+            exit 1
+          fi
           echo "run_key=$REVIEW_RUN_KEY" >> "$GITHUB_OUTPUT"
           echo "source_run_id=$REVIEW_SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "retry_round=$AUTOMATIC_RETRY_ROUND" >> "$GITHUB_OUTPUT"
           echo "retry_request_id=$RETRY_REQUEST_ID" >> "$GITHUB_OUTPUT"
+          echo "city_campaign_key=$CITY_CAMPAIGN_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Build bounded candidate matrix
         id: matrix
@@ -107,6 +119,7 @@ jobs:
           REVIEW_RUN_KEY: ${{ inputs.review_run_key }}
           RETRY_ROUND: ${{ inputs.automatic_retry_round }}
           RETRY_REQUEST_ID: ${{ inputs.retry_request_id }}
+          CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
           SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
         run: |
           python tools/build_visual_review_matrix.py \
@@ -406,6 +419,7 @@ jobs:
           REVIEW_RUN_ID: ${{ github.run_id }}
           AUTOMATIC_RETRY_ROUND: ${{ needs.plan.outputs.retry_round }}
           RETRY_REQUEST_ID: ${{ needs.plan.outputs.retry_request_id }}
+          CITY_CAMPAIGN_KEY: ${{ needs.plan.outputs.city_campaign_key }}
         run: |
           python tools/merge_chatgpt_visual_reviews.py \
             --ledger "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" \
@@ -415,6 +429,7 @@ jobs:
             --review-run-id "$REVIEW_RUN_ID" \
             --automatic-retry-round "$AUTOMATIC_RETRY_ROUND" \
             --retry-request-id "$RETRY_REQUEST_ID" \
+            --city-campaign-key "$CITY_CAMPAIGN_KEY" \
             --output "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json"
 
       - name: Refresh validated run summary
@@ -478,4 +493,52 @@ jobs:
         if: always() && steps.merge.outcome != 'success'
         run: |
           echo "The review results could not be merged into the candidate ledger. See the merge step diagnostics."
+          exit 1
+
+  notify_city_campaign:
+    needs: [plan, review_site, merge_reviews]
+    if: always() && inputs.city_campaign_key != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch city campaign checkpoint after visual review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_REF: ${{ github.ref_name }}
+          CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
+          CHILD_RUN_ID: ${{ github.run_id }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          SELECTED_COUNT: ${{ needs.plan.outputs.selected_count }}
+          MERGE_RESULT: ${{ needs.merge_reviews.result }}
+        run: |
+          child_conclusion=success
+          if [[ "$PLAN_RESULT" != "success" ]] || \
+             [[ "$SELECTED_COUNT" != "0" && "$MERGE_RESULT" != "success" ]]; then
+            child_conclusion=failure
+          fi
+          payload=$(jq -n \
+            --arg ref "$TARGET_REF" \
+            --arg campaign_key "$CITY_CAMPAIGN_KEY" \
+            --arg child_run_id "$CHILD_RUN_ID" \
+            --arg child_conclusion "$child_conclusion" \
+            '{ref:$ref,inputs:{mode:"after-visual-review",campaign_key:$campaign_key,child_run_id:$child_run_id,child_conclusion:$child_conclusion}}')
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/city-upload-campaign.yml/dispatches" \
+              --data "$payload"; then
+              echo "City campaign notified for visual-review run $CHILD_RUN_ID."
+              exit 0
+            fi
+            echo "City campaign callback attempt $attempt failed." >&2
+            sleep 5
+          done
+          echo "City campaign callback could not be dispatched after three attempts." >&2
           exit 1

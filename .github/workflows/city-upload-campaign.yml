@@ -1,0 +1,149 @@
+name: City-upload lead-hunt and visual-review campaign
+run-name: City campaign ${{ inputs.campaign_key || github.sha }} (${{ github.event_name }})
+
+on:
+  push:
+    branches: [git-chatgpt]
+    paths:
+      - config/cities.csv
+  schedule:
+    - cron: "3-59/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Campaign operation (callbacks also use after-lead-hunt and after-visual-review)"
+        required: true
+        default: resume
+        type: string
+      campaign_key:
+        description: "Required for resume; optional for start (a key is generated when blank)"
+        required: false
+        default: ""
+        type: string
+      region:
+        description: "Market label stored with each campaign"
+        required: false
+        default: Indiana
+        type: string
+      max_sites_per_query:
+        description: "Maximum direct business websites assessed per city query"
+        required: true
+        default: "3"
+        type: choice
+        options: ["1", "2", "3", "5", "8", "10"]
+      child_run_id:
+        description: "Internal callback field"
+        required: false
+        default: ""
+        type: string
+      child_conclusion:
+        description: "Internal callback field"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: website-lead-hunt-private-operations-${{ github.repository }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out public workflow code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Snapshot the uploaded public city CSV before private data is loaded
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'start')
+        run: |
+          if [[ ! -f config/cities.csv ]]; then
+            echo "Upload a CSV at config/cities.csv with a 'city' header and up to 20 rows." >&2
+            exit 1
+          fi
+          mkdir -p work/city-upload
+          cp config/cities.csv work/city-upload/cities.csv
+
+      - name: Check out private operations data
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Load private categories and campaign checkpoints
+        run: python tools/private_results.py copy-in --private-repo private-results
+
+      - name: Start, resume, or advance the campaign checkpoint
+        id: checkpoint
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_CAMPAIGN_KEY: ${{ inputs.campaign_key }}
+          INPUT_REGION: ${{ inputs.region || 'Indiana' }}
+          INPUT_MAX_SITES: ${{ inputs.max_sites_per_query || '3' }}
+          INPUT_CHILD_RUN_ID: ${{ inputs.child_run_id }}
+          INPUT_CHILD_CONCLUSION: ${{ inputs.child_conclusion }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            mode=start
+            campaign_key="city-${GITHUB_SHA:0:12}"
+          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+            mode=poll
+            campaign_key=""
+          else
+            mode="$INPUT_MODE"
+            campaign_key="$INPUT_CAMPAIGN_KEY"
+            if [[ "$mode" == "start" && -z "$campaign_key" ]]; then
+              campaign_key="city-${GITHUB_SHA:0:12}"
+            fi
+          fi
+          args=(--mode "$mode" --workspace . --github-output "$GITHUB_OUTPUT" --ref "$GITHUB_REF_NAME")
+          if [[ "$mode" == "start" ]]; then
+            args+=(--campaign-key "$campaign_key" --region "$INPUT_REGION"
+              --categories-csv config/business_categories.csv
+              --cities-csv work/city-upload/cities.csv
+              --max-sites-per-query "$INPUT_MAX_SITES")
+          elif [[ "$mode" == "resume" ]]; then
+            if [[ -z "$campaign_key" ]]; then
+              echo "campaign_key is required to resume a paused campaign" >&2
+              exit 1
+            fi
+            args+=(--campaign-key "$campaign_key")
+          elif [[ "$mode" == "after-lead-hunt" || "$mode" == "after-visual-review" ]]; then
+            args+=(--campaign-key "$campaign_key" --child-run-id "$INPUT_CHILD_RUN_ID"
+              --child-conclusion "$INPUT_CHILD_CONCLUSION")
+          fi
+          if [[ -n "$campaign_key" ]]; then
+            echo "campaign_key=$campaign_key" >> "$GITHUB_OUTPUT"
+          fi
+          python tools/city_campaign.py "${args[@]}"
+          if [[ -n "$campaign_key" ]]; then
+            echo "## City campaign: $campaign_key" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Dispatch the next lead-hunt or visual-review job
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: python tools/city_campaign.py --mode dispatch
+
+      - name: Commit campaign checkpoints to the private operations repository
+        if: always()
+        env:
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+        run: |
+          python tools/private_results.py commit-runs --private-repo private-results \
+            --message "Checkpoint city-upload lead-hunt campaign"
