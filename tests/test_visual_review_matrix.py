@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +63,46 @@ class VisualReviewMatrixTests(unittest.TestCase):
 
             self.assertEqual(selected, ["eligible-medium", "eligible-high"])
             self.assertEqual(eligible_count, 2)
+
+    def test_empty_auto_selection_is_successful_and_emits_empty_matrix(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run_dir = root / "run"
+            run_dir.mkdir()
+            (run_dir / "CANDIDATE_LEDGER.jsonl").write_text(
+                json.dumps(candidate("already-scored", scored=True)) + "\n", encoding="utf-8")
+            output = root / "github-output.txt"
+
+            result = subprocess.run(
+                [sys.executable, "tools/build_visual_review_matrix.py",
+                 "--candidate-ids", "", "--run-dir", str(run_dir),
+                 "--github-output", str(output)],
+                capture_output=True, text=True, check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plan = json.loads(result.stdout)
+            self.assertEqual(plan["status"], "no_eligible_candidates")
+            self.assertEqual(plan["message"], "No eligible candidates; batch complete.")
+            self.assertEqual(plan["matrix"], {"include": []})
+            outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            self.assertEqual(json.loads(outputs["candidate_ids"]), [])
+            self.assertEqual(outputs["selected_count"], "0")
+            self.assertEqual(outputs["eligible_count"], "0")
+            self.assertEqual(outputs["selection_mode"], "automatic")
+
+    def test_shared_workflows_queue_pending_runs_without_canceling_active_run(self):
+        workflows = [
+            Path(".github/workflows/lead-hunt.yml"),
+            Path(".github/workflows/chatgpt-visual-review-batch.yml"),
+            Path(".github/workflows/chatgpt-visual-review-retry-scheduler.yml"),
+        ]
+        for workflow in workflows:
+            with self.subTest(workflow=workflow):
+                text = workflow.read_text(encoding="utf-8")
+                self.assertIn("group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}", text)
+                self.assertIn("queue: max", text)
+                self.assertIn("cancel-in-progress: false", text)
 
 
 if __name__ == "__main__":

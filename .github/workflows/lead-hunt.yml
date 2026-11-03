@@ -48,6 +48,7 @@ permissions:
 
 concurrency:
   group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
+  queue: max
   cancel-in-progress: false
 
 jobs:

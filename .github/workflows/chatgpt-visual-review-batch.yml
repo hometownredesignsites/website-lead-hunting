@@ -34,6 +34,7 @@ permissions:
 # Share the branch lock with lead-hunt so the ledger update cannot race a lead-hunt commit.
 concurrency:
   group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -42,6 +43,8 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       candidate_ids: ${{ steps.matrix.outputs.candidate_ids }}
+      selected_count: ${{ steps.matrix.outputs.selected_count }}
+      selection_mode: ${{ steps.matrix.outputs.selection_mode }}
       run_key: ${{ steps.validate.outputs.run_key }}
       source_run_id: ${{ steps.validate.outputs.source_run_id }}
       retry_round: ${{ steps.validate.outputs.retry_round }}
@@ -118,11 +121,15 @@ jobs:
               if mode == "automatic":
                   summary.write(f"- Eligible candidates at planning time: **{values.get('eligible_count', 'unknown')}**\n")
                   summary.write(f"- Remaining after this batch: **{values.get('remaining_eligible', 'unknown')}**\n")
-              summary.write("\nEach batch is merged and committed before a later batch is started. Leave candidate IDs blank on the next manual dispatch to resume from the committed ledger.\n")
+                  if not ids:
+                      summary.write("\n**No eligible candidates; batch complete.** No review jobs were needed.\n")
+              if ids:
+                  summary.write("\nEach batch is merged and committed before a later batch is started. Leave candidate IDs blank on the next manual dispatch to resume from the committed ledger.\n")
           PY
 
   review_site:
     needs: plan
+    if: needs.plan.outputs.selected_count != '0'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -346,7 +353,7 @@ jobs:
 
   merge_reviews:
     needs: [plan, review_site]
-    if: always() && needs.plan.result == 'success'
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.selected_count != '0'
     runs-on: ubuntu-24.04
     permissions:
       actions: read

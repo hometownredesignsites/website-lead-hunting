@@ -116,8 +116,6 @@ def main() -> int:
         if not args.run_dir:
             raise ValueError("Automatic selection requires --run-dir")
         ids, eligible_count = select_eligible_candidates(args.run_dir)
-        if not ids:
-            raise ValueError("No eligible high/medium candidates without a valid visual score were found.")
     if args.retry_request_id:
         if not args.run_dir or args.retry_round < 1:
             raise ValueError("A scheduled retry requires --run-dir and a positive --retry-round")
@@ -133,6 +131,9 @@ def main() -> int:
     plan = {"matrix": matrix, "candidate_ids": ids, "selected_count": len(ids),
             "eligible_count": eligible_count,
             "remaining_eligible": max(0, eligible_count - len(ids)) if eligible_count is not None else None}
+    if not ids and eligible_count is not None:
+        plan["status"] = "no_eligible_candidates"
+        plan["message"] = "No eligible candidates; batch complete."
     print(json.dumps(plan, indent=2))
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as stream:
