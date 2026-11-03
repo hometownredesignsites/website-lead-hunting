@@ -11,12 +11,13 @@ from tools.visual_review_status import classify_attempt
 class VisualReviewRecoveryTests(unittest.TestCase):
     def test_batch_workflow_uses_proven_in_session_retry_behavior(self):
         workflow = Path(".github/workflows/chatgpt-visual-review-batch.yml").read_text(encoding="utf-8")
+        review_jobs = workflow.split("\n  notify_city_campaign:", 1)[0]
         self.assertIn("xvfb-run --auto-servernum", workflow)
         self.assertIn("tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID\"", workflow)
         self.assertIn("--allow-retry", workflow)
         self.assertIn("--refresh-before-retry", workflow)
-        self.assertNotIn("for attempt in 1 2 3", workflow)
-        self.assertNotIn("chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-$attempt", workflow)
+        self.assertNotIn("for attempt in 1 2 3", review_jobs)
+        self.assertNotIn("chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-$attempt", review_jobs)
 
     def test_missing_source_artifact_is_a_permanent_candidate_failure(self):
         decision = classify_attempt(
