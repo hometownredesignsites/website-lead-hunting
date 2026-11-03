@@ -17,12 +17,12 @@ on:
         required: true
         type: string
       child_run_id:
-        description: Internal callback: completed lead-hunt Actions run ID
+        description: "Internal callback: completed lead-hunt Actions run ID"
         required: false
         default: ""
         type: string
       child_conclusion:
-        description: Internal callback: final lead-hunt job result
+        description: "Internal callback: final lead-hunt job result"
         required: false
         default: ""
         type: string
