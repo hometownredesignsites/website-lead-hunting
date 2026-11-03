@@ -104,7 +104,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         repo = args.private_repo.resolve()
-        workspace = args.workspace.resolve()
+        workspace = args.workspace.resolve() if hasattr(args, "workspace") else Path.cwd()
         if args.command == "copy-in":
             copy_in(repo, workspace)
             print("Loaded config and durable run records from private results repository.")
