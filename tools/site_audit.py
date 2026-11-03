@@ -108,7 +108,9 @@ def _classify_contact_emails(emails: list[str], website_url: str) -> dict:
     return {"status": "consumer_provider_found" if consumer_mismatch else "business_domain_found" if findings else "not_found",
             "emails_found": findings[:30], "email_count": len(findings),
             "consumer_provider_domain_mismatch": bool(consumer_mismatch),
-            "opportunity_bonus_points": 5 if consumer_mismatch else 0,
+            "potential_opportunity_bonus_points": 5 if consumer_mismatch else 0,
+            "opportunity_bonus_points": 0,
+            "bonus_status": "awaiting_priority_scoring" if consumer_mismatch else "not_detected",
             "scope_note": "Publicly displayed email addresses are a weak small-business clue, not proof of business size or redesign need."}
 
 

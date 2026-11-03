@@ -7,6 +7,11 @@ import json
 import re
 from pathlib import Path
 
+try:
+    from .visual_review_eligibility import is_visual_review_eligible
+except ImportError:
+    from visual_review_eligibility import is_visual_review_eligible
+
 
 CANDIDATE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 MAX_CANDIDATES = 20
@@ -58,7 +63,7 @@ def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES) -> tu
         candidate_id = row.get("candidate_id")
         if (not isinstance(candidate_id, str) or not CANDIDATE_ID.fullmatch(candidate_id)
                 or row.get("site_check_status") != "loaded"
-                or row.get("automated_priority") not in {"high", "medium"}
+                or not is_visual_review_eligible(row)
                 or has_valid_visual_score(row)):
             continue
         last_attempt = row.get("chatgpt_visual_review_last_attempt") or {}

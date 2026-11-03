@@ -8,12 +8,15 @@ from pathlib import Path
 from tools.build_visual_review_matrix import parse_candidate_ids, select_eligible_candidates
 
 
-def candidate(candidate_id, *, priority="medium", last_status=None, scored=False, loaded=True):
+def candidate(candidate_id, *, priority="medium", last_status=None, scored=False, loaded=True,
+              hero_media_status=None):
     row = {
         "candidate_id": candidate_id,
         "site_check_status": "loaded" if loaded else "failed",
         "automated_priority": priority,
     }
+    if hero_media_status:
+        row["hero_media"] = {"status": hero_media_status}
     if last_status:
         row["chatgpt_visual_review_last_attempt"] = {"status": last_status}
     if scored:
@@ -62,6 +65,22 @@ class VisualReviewMatrixTests(unittest.TestCase):
             selected, eligible_count = select_eligible_candidates(run_dir)
 
             self.assertEqual(selected, ["eligible-medium", "eligible-high"])
+            self.assertEqual(eligible_count, 2)
+
+    def test_auto_selection_routes_passing_sites_with_absent_or_uncertain_hero_media(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir)
+            rows = [
+                candidate("hero-absent", priority="pass", hero_media_status="absent"),
+                candidate("hero-uncertain", priority="pass", hero_media_status="uncertain"),
+                candidate("hero-present-pass", priority="pass", hero_media_status="present"),
+            ]
+            (run_dir / "CANDIDATE_LEDGER.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+            selected, eligible_count = select_eligible_candidates(run_dir)
+
+            self.assertEqual(selected, ["hero-absent", "hero-uncertain"])
             self.assertEqual(eligible_count, 2)
 
     def test_empty_auto_selection_is_successful_and_emits_empty_matrix(self):

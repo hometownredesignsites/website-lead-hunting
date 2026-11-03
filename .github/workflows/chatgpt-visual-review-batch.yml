@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       review_candidate_ids:
-        description: "Optional: candidate IDs separated by commas or newlines. Leave blank to automatically select the next eligible high/medium candidates (up to 20)."
+        description: "Optional: candidate IDs separated by commas or newlines. Leave blank to select High/Medium candidates or candidates with absent/uncertain first-viewport hero media (up to 20)."
         required: false
         default: ""
         type: string

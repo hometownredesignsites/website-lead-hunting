@@ -73,6 +73,31 @@ class LeadHuntTests(unittest.TestCase):
         self.assertIn("score_basis", result)
         self.assertNotIn("human_review", result)
 
+    def test_consumer_email_bonus_is_applied_and_reflected_in_score_evidence(self):
+        metrics = {
+            "https": True,
+            "desktop": {"viewportMeta": True, "hasContactPath": True, "hasCta": True,
+                        "titlePresent": True, "descriptionPresent": True, "imageCount": 0,
+                        "copyrightYears": [], "heroMedia": {"status": "absent"}},
+            "mobile": {"horizontalOverflowPx": 0, "heroMedia": {"status": "absent"}},
+            "site_checks": {"contact_email_opportunity": {
+                "consumer_provider_domain_mismatch": True,
+                "potential_opportunity_bonus_points": 5,
+                "opportunity_bonus_points": 0,
+            }},
+        }
+
+        result = score_signals(metrics)
+
+        self.assertEqual(result["website_opportunity_score"], 5)
+        self.assertEqual(result["email_opportunity_bonus_points"], 5)
+        self.assertEqual(result["automated_priority"], "pass")
+        email = result["evidence"]["site_checks"]["contact_email_opportunity"]
+        self.assertEqual(email["potential_opportunity_bonus_points"], 5)
+        self.assertEqual(email["opportunity_bonus_points"], 5)
+        self.assertEqual(email["bonus_status"], "applied")
+        self.assertTrue(result["visual_review_trigger"])
+
     def test_technical_score_uses_measured_mobile_horizontal_overflow(self):
         base = {
             "https": True,

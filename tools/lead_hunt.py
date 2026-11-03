@@ -264,20 +264,42 @@ def score_signals(metrics: dict) -> dict:
     enough = len(applicable) >= 5 and not metrics.get("assessment_error")
     technical_priority = "uncertain" if not enough else "high" if score >= 61 else "medium" if score >= 41 else "pass"
     email_signal = ((metrics.get("site_checks") or {}).get("contact_email_opportunity") or {})
-    email_bonus = 5 if (enough and technical_priority in {"high", "medium"} and
-                        email_signal.get("consumer_provider_domain_mismatch")) else 0
+    # The email signal is an opportunity bonus, separate from the technical
+    # priority band. Apply it to the normalized score whenever the assessment
+    # has enough evidence; the resulting score then determines the final band.
+    email_bonus = 5 if (enough and email_signal.get("consumer_provider_domain_mismatch")) else 0
     if score is not None and email_bonus:
         score = min(100, score + email_bonus)
     priority = "uncertain" if not enough else "high" if score >= 61 else "medium" if score >= 41 else "pass"
+    evidence = json.loads(json.dumps(metrics))
+    scored_email_signal = ((evidence.get("site_checks") or {}).get("contact_email_opportunity") or {})
+    if scored_email_signal:
+        scored_email_signal["potential_opportunity_bonus_points"] = 5 if email_signal.get("consumer_provider_domain_mismatch") else 0
+        scored_email_signal["opportunity_bonus_points"] = email_bonus
+        scored_email_signal["bonus_status"] = "applied" if email_bonus else (
+            "not_applied_insufficient_evidence" if email_signal.get("consumer_provider_domain_mismatch") and not enough
+            else "not_detected")
+    desktop_hero = desktop.get("heroMedia") or {} if isinstance(desktop, dict) else {}
+    mobile_hero = mobile.get("heroMedia") or {} if isinstance(mobile, dict) else {}
+    hero_statuses = [view.get("status") for view in (desktop_hero, mobile_hero) if isinstance(view, dict)]
+    hero_trigger_views = [name for name, view in (("desktop", desktop_hero), ("mobile", mobile_hero))
+                         if isinstance(view, dict) and view.get("status") in {"absent", "uncertain"}]
+    overall_hero_status = ("uncertain" if "uncertain" in hero_statuses else
+                           "absent" if "absent" in hero_statuses else
+                           "present" if "present" in hero_statuses else "uncertain")
+    hero_media = {"status": overall_hero_status, "trigger_views": hero_trigger_views,
+                  "desktop": desktop_hero, "mobile": mobile_hero}
     return {"automated_priority": priority, "website_opportunity_score": score,
             "technical_priority_before_email_bonus": technical_priority,
             "email_opportunity_bonus_points": email_bonus,
-            "score_basis": "normalized technical score plus up to 5 opportunity points for a detected consumer email domain on an initial medium/high candidate; visual judgment is pending",
+            "score_basis": "normalized technical score plus 5 opportunity points for a detected consumer email domain when evidence is sufficient; absent or uncertain desktop/mobile first-viewport hero media triggers visual review",
             "signals": {key: "unknown" if value is None else "issue" if value else "clear" for key, value in checks.items()},
             "opportunity_signals": {"consumer_email_domain_mismatch":
                                     "observed" if email_signal.get("consumer_provider_domain_mismatch") else
                                     "not_observed" if "consumer_provider_domain_mismatch" in email_signal else "unknown"},
-            "evidence": metrics, "evidence_confidence": "sufficient" if enough else "limited"}
+            "hero_media": hero_media,
+            "visual_review_trigger": hero_media.get("status") in {"absent", "uncertain"},
+            "evidence": evidence, "evidence_confidence": "sufficient" if enough else "limited"}
 
 
 def parse_search_results(items: list[dict]) -> list[dict]:
@@ -457,6 +479,66 @@ async def screenshot_with_fallback(page, path: Path, full_timeout_ms: int = 3000
 async def page_metrics(page) -> dict:
     return await page.evaluate("""() => {
       const text = document.body?.innerText || '';
+      const viewport = {width: window.innerWidth, height: window.innerHeight};
+      const bounds = el => {
+        const r = el.getBoundingClientRect();
+        const left = Math.max(0, r.left), top = Math.max(0, r.top);
+        const right = Math.min(viewport.width, r.right), bottom = Math.min(viewport.height, r.bottom);
+        return {x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width),
+          height: Math.round(r.height), visibleWidth: Math.max(0, Math.round(right-left)),
+          visibleHeight: Math.max(0, Math.round(bottom-top))};
+      };
+      const visible = el => {
+        if (!el || !el.getClientRects().length) return false;
+        const s = getComputedStyle(el), r = el.getBoundingClientRect();
+        return s.visibility !== 'hidden' && Number(s.opacity || 1) > 0.05 &&
+          r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 &&
+          r.left < viewport.width && r.top < viewport.height;
+      };
+      const relativeTo = (rect, other) => {
+        if (!other) return 'not_found';
+        const xOverlap = rect.x < other.x + other.width && other.x < rect.x + rect.width;
+        const yOverlap = rect.y < other.y + other.height && other.y < rect.y + rect.height;
+        if (xOverlap && yOverlap) return 'overlaps';
+        if (rect.y + rect.height <= other.y) return 'above';
+        if (rect.y >= other.y + other.height) return 'below';
+        return rect.x + rect.width <= other.x ? 'left' : rect.x >= other.x + other.width ? 'right' : 'adjacent';
+      };
+      const headline = [...document.querySelectorAll('h1')].find(visible) || null;
+      const cta = [...document.querySelectorAll('a[href],button,[role="button"]')].find(el =>
+        visible(el) && /contact|call|book|schedule|request|get a quote|estimate|get in touch/i.test((el.innerText || el.textContent || '').trim()));
+      const headlineRect = headline ? bounds(headline) : null;
+      const ctaRect = cta ? bounds(cta) : null;
+      const media = [];
+      const pushMedia = (el, type, naturalWidth=0, naturalHeight=0, alt='') => {
+        const r = bounds(el), area = r.visibleWidth * r.visibleHeight;
+        if (!area) return;
+        const areaPercent = Math.round(area * 1000 / Math.max(1, viewport.width * viewport.height)) / 10;
+        const loaded = type === 'image' ? naturalWidth > 0 : type === 'video' ? naturalWidth > 0 : null;
+        media.push({type, x:r.x, y:r.y, width:r.width, height:r.height,
+          visibleWidth:r.visibleWidth, visibleHeight:r.visibleHeight, viewportAreaPercent:areaPercent,
+          naturalWidth, naturalHeight, loaded, alt:(alt || '').trim().slice(0,180),
+          relation_to_headline:relativeTo(r, headlineRect), relation_to_primary_cta:relativeTo(r, ctaRect),
+          prominent:r.visibleWidth >= 120 && r.visibleHeight >= 90 && areaPercent >= 8 && loaded !== false});
+      };
+      for (const img of document.querySelectorAll('img')) if (visible(img))
+        pushMedia(img, 'image', img.naturalWidth || 0, img.naturalHeight || 0, img.alt || '');
+      for (const video of document.querySelectorAll('video')) if (visible(video))
+        pushMedia(video, 'video', video.videoWidth || 0, video.videoHeight || 0, video.getAttribute('aria-label') || '');
+      for (const el of [document.body, ...document.querySelectorAll('body *')].slice(0, 1600)) {
+        if (!visible(el)) continue;
+        const background = getComputedStyle(el).backgroundImage;
+        if (background && background !== 'none' && /url\\s*\\(/i.test(background))
+          pushMedia(el, 'background_image');
+      }
+      const prominentCount = media.filter(item => item.prominent).length;
+      const heroMedia = {status: !headline ? 'uncertain' : prominentCount ? 'present' : 'absent',
+        viewport, headline: headline ? {text:(headline.innerText || headline.textContent || '').trim().slice(0,240), ...headlineRect} : null,
+        primary_cta: cta ? {text:(cta.innerText || cta.textContent || '').trim().slice(0,180), ...ctaRect} : null,
+        media_candidates: media.slice(0,30), prominent_media_count:prominentCount,
+        detection_note: !headline ? 'No visible first-viewport h1; hero boundary is uncertain.' :
+          prominentCount ? 'At least one prominent image, video, or CSS background image is visible in the first viewport.' :
+          'No prominent image, video, or CSS background image was detected in the first viewport.'};
       return {
         viewportMeta: !!document.querySelector('meta[name="viewport"]'),
         documentWidth: document.documentElement.scrollWidth,
@@ -468,7 +550,8 @@ async def page_metrics(page) -> dict:
         hasCta: [...document.querySelectorAll('a,button')].some(a => /contact|call|visit|book|schedule|request|get a quote|estimate|get in touch/i.test((a.innerText||'').trim())),
         titlePresent: !!document.title.trim(),
         descriptionPresent: !!document.querySelector('meta[name="description"]')?.content.trim(),
-        copyrightYears: [...text.matchAll(/(?:©|copyright)\\s*(?:\\d{4}\\s*[-–]\\s*)?(20\\d{2})/ig)].map(m => Number(m[1]))
+        copyrightYears: [...text.matchAll(/(?:©|copyright)\\s*(?:\\d{4}\\s*[-–]\\s*)?(20\\d{2})/ig)].map(m => Number(m[1])),
+        heroMedia
       };
     }""")
 
@@ -544,12 +627,14 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
         return {"site_check_status": "loaded", "domain": final_host, "final_url": final_url,
                 "site_title": metrics.get("title", ""), "automated_priority": signals["automated_priority"],
                 "website_opportunity_score": signals["website_opportunity_score"],
+                "hero_media": signals["hero_media"],
+                "visual_review_trigger": signals["visual_review_trigger"],
                 "score_basis": signals["score_basis"], "signals": signals["signals"],
                 "technical_priority_before_email_bonus": signals["technical_priority_before_email_bonus"],
                 "email_opportunity_bonus_points": signals["email_opportunity_bonus_points"],
                 "opportunity_signals": signals["opportunity_signals"],
-                "evidence": metrics, "screenshots": shots, "evidence_confidence": signals["evidence_confidence"],
-                "site_checks": metrics.get("site_checks", {"status": "unknown"}),
+                "evidence": signals["evidence"], "screenshots": shots, "evidence_confidence": signals["evidence_confidence"],
+                "site_checks": (signals.get("evidence") or {}).get("site_checks", {"status": "unknown"}),
                 "hermes_visual_review": "pending", "human_review": "pending"}
     except Exception as exc:
         if logger:
@@ -561,6 +646,8 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
         return {"site_check_status": "error", "domain": host_of(page.url) or requested_host,
                 "final_url": page.url, "automated_priority": signals["automated_priority"],
                 "website_opportunity_score": signals["website_opportunity_score"],
+                "hero_media": signals["hero_media"],
+                "visual_review_trigger": signals["visual_review_trigger"],
                 "score_basis": signals["score_basis"], "signals": signals["signals"],
                 "technical_priority_before_email_bonus": signals["technical_priority_before_email_bonus"],
                 "email_opportunity_bonus_points": signals["email_opportunity_bonus_points"],
