@@ -290,7 +290,9 @@ def dispatch_payload(state: dict, ref: str) -> tuple[str, dict]:
     if action == "lead_hunt":
         index = int(state["current_category_index"])
         source_row = int(state["current_category"].get("source_row", index))
-        return ".github/workflows/lead-hunt.yml", {
+        # The Actions REST API identifies a workflow by its file name or numeric ID,
+        # not by the repository path to the workflow file.
+        return "lead-hunt.yml", {
             "ref": ref,
             "inputs": {
                 "run_key": state["current_run_key"],
@@ -303,7 +305,7 @@ def dispatch_payload(state: dict, ref: str) -> tuple[str, dict]:
             },
         }
     if action == "visual_review":
-        return ".github/workflows/chatgpt-visual-review-batch.yml", {
+        return "chatgpt-visual-review-batch.yml", {
             "ref": ref,
             "inputs": {
                 "review_run_key": state["current_run_key"],
