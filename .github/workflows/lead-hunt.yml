@@ -128,9 +128,15 @@ jobs:
         env:
           MAX_SITES_PER_QUERY: ${{ inputs.max_sites_per_query }}
           MAX_QUERIES: ${{ inputs.max_queries }}
+          RUN_KEY: ${{ inputs.run_key }}
+          CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
         run: |
-          python tools/plan_run.py --max-sites-per-query "$MAX_SITES_PER_QUERY" \
-            --queries-per-job "$MAX_QUERIES" | tee plan.json
+          args=(--max-sites-per-query "$MAX_SITES_PER_QUERY" --queries-per-job "$MAX_QUERIES")
+          if [[ -n "$CITY_CAMPAIGN_KEY" ]]; then
+            args+=(--categories-csv "work/city-campaign/$RUN_KEY/business_categories.csv"
+              --cities-csv "work/city-campaign/$RUN_KEY/cities.csv")
+          fi
+          python tools/plan_run.py "${args[@]}" | tee plan.json
           {
             echo '## CSV query plan'
             echo '```json'
