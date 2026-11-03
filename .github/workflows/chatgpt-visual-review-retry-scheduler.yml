@@ -23,14 +23,14 @@ jobs:
       - name: Check out the default branch
         uses: actions/checkout@v5
 
-      - name: Dispatch due retries with available source artifacts
+      - name: Prepare due retries with available source artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: python tools/dispatch_due_visual_review_retries.py
 
-      - name: Commit retry queue updates
+      - name: Commit retry reservations before dispatch
         if: always()
         shell: bash
         run: |
@@ -42,4 +42,25 @@ jobs:
             git push origin "HEAD:${GITHUB_REF_NAME}"
           else
             echo "No retry queue changes to commit."
+          fi
+
+      - name: Dispatch committed retry reservations
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: python tools/dispatch_due_visual_review_retries.py --dispatch-ready
+
+      - name: Commit retry dispatch outcomes
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain -- 'runs/*/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json')" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- runs/*/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json
+            git commit -m "Record ChatGPT visual review retry dispatch"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "No retry dispatch outcome changes to commit."
           fi

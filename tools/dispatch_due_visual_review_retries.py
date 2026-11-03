@@ -89,7 +89,7 @@ def dispatch_group(token: str, repository: str, ref: str, group: dict) -> None:
         raise RuntimeError(f"GitHub workflow dispatch returned HTTP {status}")
 
 
-def process(workspace: Path, repository: str, token: str, ref: str) -> dict:
+def process(workspace: Path, repository: str, token: str, ref: str, *, dispatch_ready: bool = False) -> dict:
     now = utcnow()
     due_groups: dict[tuple, list[tuple[Path, dict]]] = {}
     changed_queues: dict[Path, dict] = {}
@@ -114,17 +114,21 @@ def process(workspace: Path, repository: str, token: str, ref: str) -> dict:
             if not isinstance(entry, dict):
                 print(f"Skipping malformed entry in {queue_path}.")
                 continue
-            if entry.get("status") != "pending" or not entry.get("not_before"):
+            wanted_status = "ready_to_dispatch" if dispatch_ready else "pending"
+            if entry.get("status") != wanted_status:
                 continue
-            try:
-                not_before = datetime.fromisoformat(entry["not_before"].replace("Z", "+00:00"))
-            except ValueError:
-                entry.update({"status": "invalid_schedule", "not_before": None,
-                              "last_dispatch_error": "Invalid retry due timestamp."})
-                changed_queues[queue_path] = queue
-                continue
-            if not_before > now:
-                continue
+            if not dispatch_ready:
+                if not entry.get("not_before"):
+                    continue
+                try:
+                    not_before = datetime.fromisoformat(entry["not_before"].replace("Z", "+00:00"))
+                except ValueError:
+                    entry.update({"status": "invalid_schedule", "not_before": None,
+                                  "last_dispatch_error": "Invalid retry due timestamp."})
+                    changed_queues[queue_path] = queue
+                    continue
+                if not_before > now:
+                    continue
             row = candidates.get(entry.get("candidate_id"))
             latest = (row or {}).get("chatgpt_visual_review_last_attempt") or {}
             if (not row or latest.get("status") != "retry-needed"
@@ -147,17 +151,18 @@ def process(workspace: Path, repository: str, token: str, ref: str) -> dict:
                 changed_queues[queue_path] = queue
                 continue
             key = (entry["run_key"], str(entry["source_lead_hunt_run_id"]),
-                   int(entry["automatic_retry_round"]))
+                   int(entry["automatic_retry_round"]),
+                   entry.get("dispatch_request_id") if dispatch_ready else None)
             due_groups.setdefault(key, []).append((queue_path, entry))
 
-    dispatched = 0
+    processed_groups = 0
     for key, entries in sorted(due_groups.items()):
-        run_key, source_run_id, retry_round = key
+        run_key, source_run_id, retry_round, existing_request_id = key
         entries.sort(key=lambda item: item[1]["candidate_id"])
         for start in range(0, len(entries), MAX_CANDIDATES_PER_DISPATCH):
             chunk = entries[start:start + MAX_CANDIDATES_PER_DISPATCH]
             candidate_ids = [entry["candidate_id"] for _, entry in chunk]
-            request_id = ",".join(sorted(entry["retry_request_id"] for _, entry in chunk))
+            request_id = existing_request_id or ",".join(sorted(entry["retry_request_id"] for _, entry in chunk))
             group = {
                 "run_key": run_key,
                 "source_lead_hunt_run_id": source_run_id,
@@ -165,37 +170,53 @@ def process(workspace: Path, repository: str, token: str, ref: str) -> dict:
                 "candidate_ids": candidate_ids,
                 "retry_request_id": request_id,
             }
+            if not dispatch_ready:
+                stamp = iso_now()
+                for queue_path, entry in chunk:
+                    entry.update({"status": "ready_to_dispatch", "dispatch_prepared_at": stamp,
+                                  "dispatch_request_id": request_id, "updated_at": stamp,
+                                  "last_dispatch_error": None})
+                    if queue_path not in changed_queues:
+                        changed_queues[queue_path] = json.loads(queue_path.read_text(encoding="utf-8-sig"))
+                    target = next(item for item in changed_queues[queue_path]["entries"]
+                                  if item.get("candidate_id") == entry["candidate_id"])
+                    target.update(entry)
+                processed_groups += 1
+                print(f"Prepared retry round {retry_round} for {run_key}: {', '.join(candidate_ids)}")
+                continue
+
             try:
                 dispatch_group(token, repository, ref, group)
             except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError) as exc:
                 message = str(exc)[:300]
                 for queue_path, entry in chunk:
-                    entry["dispatch_failures"] = int(entry.get("dispatch_failures", 0)) + 1
-                    entry["last_dispatch_error"] = message
-                    entry["updated_at"] = iso_now()
-                    changed_queues[queue_path] = json.loads(queue_path.read_text(encoding="utf-8-sig"))
+                    entry.update({"status": "pending", "not_before": iso_now(),
+                                  "dispatch_failures": int(entry.get("dispatch_failures", 0)) + 1,
+                                  "last_dispatch_error": message, "updated_at": iso_now()})
+                    if queue_path not in changed_queues:
+                        changed_queues[queue_path] = json.loads(queue_path.read_text(encoding="utf-8-sig"))
                     target = next(item for item in changed_queues[queue_path]["entries"]
                                   if item.get("candidate_id") == entry["candidate_id"])
                     target.update(entry)
                 print(f"Dispatch failed for {run_key} round {retry_round}: {message}")
+                processed_groups += 1
                 continue
             stamp = iso_now()
             for queue_path, entry in chunk:
                 entry.update({"status": "dispatched", "dispatched_at": stamp,
-                              "dispatch_request_id": request_id, "updated_at": stamp,
-                              "last_dispatch_error": None})
+                              "updated_at": stamp, "last_dispatch_error": None})
                 if queue_path not in changed_queues:
                     changed_queues[queue_path] = json.loads(queue_path.read_text(encoding="utf-8-sig"))
                 target = next(item for item in changed_queues[queue_path]["entries"]
                               if item.get("candidate_id") == entry["candidate_id"])
                 target.update(entry)
-            dispatched += 1
+            processed_groups += 1
             print(f"Dispatched retry round {retry_round} for {run_key}: {', '.join(candidate_ids)}")
 
     for queue_path, queue in changed_queues.items():
         queue["updated_at"] = iso_now()
         queue_path.write_text(json.dumps(queue, indent=2) + "\n", encoding="utf-8")
-    return {"queue_files": len(queue_paths), "dispatches": dispatched,
+    return {"queue_files": len(queue_paths), "groups_processed": processed_groups,
             "updated_queue_files": len(changed_queues)}
 
 
@@ -205,10 +226,13 @@ def main() -> int:
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN", ""))
     parser.add_argument("--ref", default=os.environ.get("GITHUB_REF_NAME", ""))
+    parser.add_argument("--dispatch-ready", action="store_true",
+                        help="Dispatch entries already committed as ready_to_dispatch.")
     args = parser.parse_args()
     if not args.repository or not args.token or not args.ref:
         parser.error("repository, token, and ref are required (or set the matching GitHub Actions environment variables)")
-    print(json.dumps(process(args.workspace, args.repository, args.token, args.ref), indent=2))
+    print(json.dumps(process(args.workspace, args.repository, args.token, args.ref,
+                            dispatch_ready=args.dispatch_ready), indent=2))
     return 0
 
 

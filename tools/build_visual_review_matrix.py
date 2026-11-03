@@ -44,7 +44,7 @@ def validate_scheduled_retry(run_dir: Path, candidate_ids: list[str], retry_roun
     for candidate_id in candidate_ids:
         entry = entries.get(candidate_id) or {}
         last_attempt = (ledger.get(candidate_id) or {}).get("chatgpt_visual_review_last_attempt") or {}
-        if (entry.get("status") != "dispatched"
+        if (entry.get("status") not in {"ready_to_dispatch", "dispatched"}
                 or entry.get("dispatch_request_id") != retry_request_id
                 or int(entry.get("automatic_retry_round", -1)) != retry_round
                 or str(entry.get("source_lead_hunt_run_id")) != str(source_run_id)
