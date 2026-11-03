@@ -20,7 +20,7 @@ from tools.lead_hunt_campaign import (
 def event_for(batch: int = 1, attempt: int = 1, run_id: int = 11,
               conclusion: str = "success") -> dict:
     return {"workflow_run": {
-        "name": "ChatGPT website lead hunt",
+        "name": f"ChatGPT website lead hunt campaign-x campaign=campaign-x batch={batch} attempt={attempt}",
         "event": "workflow_dispatch",
         "display_title": f"ChatGPT website lead hunt campaign-x campaign=campaign-x batch={batch} attempt={attempt}",
         "id": run_id,
@@ -67,7 +67,7 @@ class LeadHuntCampaignTests(unittest.TestCase):
     def test_workflow_run_api_record_supplies_campaign_display_title(self) -> None:
         from io import BytesIO
         response = BytesIO(json.dumps({"name": "ChatGPT website lead hunt",
-            "event": "workflow_dispatch", "display_title":
+            "event": "workflow_dispatch", "path": ".github/workflows/lead-hunt.yml@refs/heads/git-chatgpt", "display_title":
             "ChatGPT website lead hunt campaign-x campaign=campaign-x batch=1 attempt=1"}).encode())
         response.status = 200
         with patch("tools.lead_hunt_campaign.urllib.request.urlopen") as open_url:
