@@ -1,0 +1,38 @@
+name: Private results connection check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-lead-hunt-private-operations-${{ github.repository }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  verify_private_access:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out public workflow code
+        uses: actions/checkout@v5
+
+      - name: Check out private operations repository
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Verify private data can be read
+        run: python tools/private_results.py copy-in --private-repo private-results
+
+      - name: Verify private data can be written and cleaned up
+        env:
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python tools/private_results.py smoke-test --private-repo private-results --run-id "$GITHUB_RUN_ID"

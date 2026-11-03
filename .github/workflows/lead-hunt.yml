@@ -61,10 +61,10 @@ on:
 
 permissions:
   actions: write
-  contents: write
+  contents: read
 
 concurrency:
-  group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
+  group: website-lead-hunt-private-operations-${{ github.repository }}
   queue: max
   cancel-in-progress: false
 
@@ -80,6 +80,18 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
+
+      - name: Check out private operations data
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Load configuration and checkpoints from private repository
+        run: python tools/private_results.py copy-in --private-repo private-results
 
       - name: Install pinned Python dependencies
         run: |
@@ -187,37 +199,19 @@ jobs:
             python tools/export_high_medium_candidates.py --run-dir "runs/$RUN_KEY"
           fi
 
-      - name: Commit text findings to the selected branch
+      - name: Commit text findings to the private results repository
         if: always()
         shell: bash
         env:
           RUN_KEY: ${{ inputs.run_key }}
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           if ! [[ "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || [[ ! -d "runs/$RUN_KEY" ]]; then
             echo "No safe run directory to commit."
             exit 0
           fi
-          if [[ -n "$(git status --porcelain -- "runs/$RUN_KEY")" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -- "runs/$RUN_KEY"
-            while IFS= read -r -d '' staged_path; do
-              case "${staged_path,,}" in
-                *.png|*.jpg|*.jpeg|*.webp|*.gif)
-                  git reset -q -- "$staged_path"
-                  ;;
-              esac
-            done < <(git diff --cached --name-only -z -- "runs/$RUN_KEY")
-            if ! git diff --cached --quiet; then
-              git commit -m "Record website lead-hunt batch: $RUN_KEY"
-              git push origin "HEAD:${GITHUB_REF_NAME}"
-            else
-              echo "No commit-worthy run data after applying screenshot setting."
-            fi
-          else
-            echo "No new run data to commit."
-          fi
+          python tools/private_results.py commit-run --private-repo private-results \
+            --run-key "$RUN_KEY" --message "Record website lead-hunt batch: $RUN_KEY"
 
       - name: Upload a short-lived backup artifact
         if: always()

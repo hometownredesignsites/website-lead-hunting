@@ -72,12 +72,12 @@ on:
 
 permissions:
   actions: write
-  contents: write
+  contents: read
 
 # The coordinator only holds this shared lock while changing a checkpoint or
 # dispatching the next bounded batch. The six-hour browser job remains separate.
 concurrency:
-  group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
+  group: website-lead-hunt-private-operations-${{ github.repository }}
   queue: max
   cancel-in-progress: false
 
@@ -102,6 +102,18 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.target.outputs.ref }}
+
+      - name: Check out private operations data
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Load configuration and checkpoints from private repository
+        run: python tools/private_results.py copy-in --private-repo private-results
 
       - name: Start or resume a campaign
         id: manual
@@ -177,20 +189,14 @@ jobs:
         env:
           RUN_KEY: ${{ steps.manual.outputs.run_key || steps.completion.outputs.run_key }}
           TARGET_REF: ${{ steps.target.outputs.ref }}
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
           if [[ -z "$RUN_KEY" || ! -f "runs/$RUN_KEY/CAMPAIGN_STATE.json" ]]; then
             echo "No campaign checkpoint to commit."
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- "runs/$RUN_KEY/CAMPAIGN_STATE.json"
-          if ! git diff --cached --quiet; then
-            git commit -m "Update lead-hunt campaign checkpoint: $RUN_KEY"
-            git push origin "HEAD:${TARGET_REF}"
-          else
-            echo "Campaign checkpoint is already committed."
-          fi
+          python tools/private_results.py commit-run --private-repo private-results \
+            --run-key "$RUN_KEY" --message "Update lead-hunt campaign checkpoint: $RUN_KEY"
 
       - name: Dispatch next bounded lead-hunt batch
         if: always() && (steps.manual.outputs.dispatch == 'true' || steps.completion.outputs.dispatch == 'true')

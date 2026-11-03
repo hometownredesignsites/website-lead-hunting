@@ -31,9 +31,9 @@ permissions:
   actions: read
   contents: read
 
-# Share the branch lock with lead-hunt so the ledger update cannot race a lead-hunt commit.
+# Share the repository-wide lock with every writer of the private operations repository.
 concurrency:
-  group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
+  group: website-lead-hunt-private-operations-${{ github.repository }}
   queue: max
   cancel-in-progress: false
 
@@ -52,6 +52,18 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Check out private operations data
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Load candidate ledgers from private repository
+        run: python tools/private_results.py copy-in --private-repo private-results
 
       - name: Validate batch and run key
         id: validate
@@ -357,12 +369,24 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
-      contents: write
+      contents: read
     steps:
       - name: Check out the target branch
         uses: actions/checkout@v5
         with:
           ref: ${{ github.ref }}
+
+      - name: Check out private operations data
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Load candidate ledgers from private repository
+        run: python tools/private_results.py copy-in --private-repo private-results
 
       - name: Download per-candidate review artifacts
         uses: actions/download-artifact@v7
@@ -436,26 +460,15 @@ jobs:
                   report.write(f"| {status} | {statuses.get(status, 0)} | {', '.join(ids) if ids else '—'} |\n")
           PY
 
-      - name: Commit durable scorecards and run summary
+      - name: Commit durable scorecards and run summary to private repository
         if: always()
         shell: bash
         env:
           RUN_KEY: ${{ needs.plan.outputs.run_key }}
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" \
-            "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json" \
-            "runs/$RUN_KEY/RUN_SUMMARY.json" \
-            "runs/$RUN_KEY/RUN_SUMMARY.md" \
-            "runs/$RUN_KEY/HIGH_MEDIUM_CANDIDATES.csv" \
-            "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
-          if ! git diff --cached --quiet; then
-            git commit -m "Save ChatGPT visual reviews: $RUN_KEY"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          else
-            echo "No candidate review changes to commit."
-          fi
+          python tools/private_results.py commit-run --private-repo private-results \
+            --run-key "$RUN_KEY" --message "Save ChatGPT visual reviews: $RUN_KEY"
 
       - name: Report candidate job interruptions
         if: always() && needs.review_site.result != 'success'

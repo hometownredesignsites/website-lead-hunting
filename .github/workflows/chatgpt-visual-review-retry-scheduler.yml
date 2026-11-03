@@ -8,11 +8,11 @@ on:
 
 permissions:
   actions: write
-  contents: write
+  contents: read
 
-# Serialize with lead-hunt and review-merge commits so queue updates cannot race.
+# Serialize private retry-queue writes with lead-hunt and review-score commits.
 concurrency:
-  group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}
+  group: website-lead-hunt-private-operations-${{ github.repository }}
   queue: max
   cancel-in-progress: false
 
@@ -24,6 +24,18 @@ jobs:
       - name: Check out the default branch
         uses: actions/checkout@v5
 
+      - name: Check out private operations data
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Load retry queues from private repository
+        run: python tools/private_results.py copy-in --private-repo private-results
+
       - name: Prepare due retries with available source artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -34,16 +46,11 @@ jobs:
       - name: Commit retry reservations before dispatch
         if: always()
         shell: bash
+        env:
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
-          if [[ -n "$(git status --porcelain -- 'runs/*/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json')" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -- runs/*/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json
-            git commit -m "Update ChatGPT visual review retry queue"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          else
-            echo "No retry queue changes to commit."
-          fi
+          python tools/private_results.py commit-runs --private-repo private-results \
+            --message "Update ChatGPT visual review retry queue"
 
       - name: Dispatch committed retry reservations
         env:
@@ -55,13 +62,8 @@ jobs:
       - name: Commit retry dispatch outcomes
         if: always()
         shell: bash
+        env:
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
-          if [[ -n "$(git status --porcelain -- 'runs/*/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json')" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -- runs/*/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json
-            git commit -m "Record ChatGPT visual review retry dispatch"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          else
-            echo "No retry dispatch outcome changes to commit."
-          fi
+          python tools/private_results.py commit-runs --private-repo private-results \
+            --message "Record ChatGPT visual review retry dispatch"

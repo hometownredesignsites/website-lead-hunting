@@ -100,7 +100,7 @@ class VisualReviewMatrixTests(unittest.TestCase):
         for workflow in workflows:
             with self.subTest(workflow=workflow):
                 text = workflow.read_text(encoding="utf-8")
-                self.assertIn("group: website-lead-hunt-${{ github.repository }}-${{ github.ref_name }}", text)
+                self.assertIn("group: website-lead-hunt-private-operations-${{ github.repository }}", text)
                 self.assertIn("queue: max", text)
                 self.assertIn("cancel-in-progress: false", text)
 

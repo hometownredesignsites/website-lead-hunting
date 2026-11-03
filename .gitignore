@@ -4,9 +4,6 @@ __pycache__/
 venv/
 artifacts/
 tmp/
+config/
+runs/
 .playwright-chatgpt-profile/
-runs/**/*.png
-runs/**/*.jpg
-runs/**/*.jpeg
-runs/**/*.webp
-runs/**/*.gif
