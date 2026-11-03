@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from build_visual_review_matrix import select_eligible_candidates
+from visual_review_eligibility import is_visual_review_eligible
 
 
 KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
@@ -230,7 +231,7 @@ def review_counts(run_dir: Path) -> dict:
         if not line.strip():
             continue
         row = json.loads(line)
-        if row.get("site_check_status") != "loaded" or row.get("automated_priority") not in {"high", "medium"}:
+        if row.get("site_check_status") != "loaded" or not is_visual_review_eligible(row):
             continue
         last = row.get("chatgpt_visual_review_last_attempt") or {}
         status = last.get("status")
