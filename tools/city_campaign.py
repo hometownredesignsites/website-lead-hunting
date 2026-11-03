@@ -149,13 +149,21 @@ def start_next_category(workspace: Path, state: dict) -> None:
 
 
 def create_campaign(workspace: Path, campaign_key: str, region: str, categories_csv: Path,
-                    cities_csv: Path, max_sites: int = 3) -> tuple[Path, dict]:
+                    cities_csv: Path, max_sites: int = 3,
+                    category_index: int = 0) -> tuple[Path, dict]:
     path = state_path(workspace, campaign_key)
     if path.exists():
         raise ValueError(f"Campaign {campaign_key!r} already exists")
     if not 1 <= max_sites <= 10:
         raise ValueError("max_sites must be between 1 and 10")
     categories = category_values(categories_csv)
+    catalog_category_count = len(categories)
+    if category_index:
+        if not 1 <= category_index <= catalog_category_count:
+            raise ValueError(f"category_index must be between 1 and {catalog_category_count}")
+        selected = categories[category_index - 1].copy()
+        selected["index"] = 1
+        categories = [selected]
     cities = city_values(cities_csv)
     input_dir = path.parent / "inputs"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -168,6 +176,8 @@ def create_campaign(workspace: Path, campaign_key: str, region: str, categories_
         "stage": "queued",
         "region": region.strip() or "Indiana",
         "categories": categories,
+        "catalog_category_count": catalog_category_count,
+        "selected_source_category_index": category_index or None,
         "city_count": len(cities),
         "city_names": cities,
         "total_searches": len(categories) * len(cities),
@@ -182,7 +192,9 @@ def create_campaign(workspace: Path, campaign_key: str, region: str, categories_
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "history": [{"event": "campaign_created", "at": now_iso(),
-                     "category_count": len(categories), "city_count": len(cities)}],
+                     "category_count": len(categories), "catalog_category_count": catalog_category_count,
+                     "selected_source_category_index": category_index or None,
+                     "city_count": len(cities)}],
         "next_action": None,
         "pause_reason": None,
     }
@@ -277,6 +289,7 @@ def dispatch_payload(state: dict, ref: str) -> tuple[str, dict]:
     action = state.get("next_action")
     if action == "lead_hunt":
         index = int(state["current_category_index"])
+        source_row = int(state["current_category"].get("source_row", index))
         return ".github/workflows/lead-hunt.yml", {
             "ref": ref,
             "inputs": {
@@ -286,7 +299,7 @@ def dispatch_payload(state: dict, ref: str) -> tuple[str, dict]:
                 "max_sites_per_query": str(state["max_sites_per_query"]),
                 "capture_google_evidence": "false",
                 "city_campaign_key": state["campaign_key"],
-                "city_campaign_category_index": str(index),
+                "city_campaign_category_index": str(source_row),
             },
         }
     if action == "visual_review":
@@ -369,6 +382,8 @@ def main() -> int:
     parser.add_argument("--categories-csv", type=Path, default=Path("config/business_categories.csv"))
     parser.add_argument("--cities-csv", type=Path, default=Path("config/cities.csv"))
     parser.add_argument("--max-sites-per-query", type=int, default=3)
+    parser.add_argument("--category-index", type=int, default=0,
+                        help="Optional one-based category row; use 0 to run the complete catalog")
     parser.add_argument("--child-run-id", default="")
     parser.add_argument("--child-conclusion", default="")
     parser.add_argument("--github-output", type=Path)
@@ -384,7 +399,7 @@ def main() -> int:
         categories = args.categories_csv if args.categories_csv.is_absolute() else workspace / args.categories_csv
         cities = args.cities_csv if args.cities_csv.is_absolute() else workspace / args.cities_csv
         path, state = create_campaign(workspace, key, args.region, categories, cities,
-                                     args.max_sites_per_query)
+                                     args.max_sites_per_query, args.category_index)
         if state.get("next_action"):
             dispatch_keys.append(key)
     elif args.mode == "resume":
