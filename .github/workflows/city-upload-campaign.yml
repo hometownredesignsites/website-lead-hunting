@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Campaign operation (callbacks also use after-lead-hunt and after-visual-review)"
+        description: "Campaign operation (dispatch retries a saved pending child job)"
         required: true
         default: resume
         type: string
@@ -136,7 +136,15 @@ jobs:
           if [[ -n "$campaign_key" ]]; then
             echo "campaign_key=$campaign_key" >> "$GITHUB_OUTPUT"
           fi
-          python tools/city_campaign.py "${args[@]}"
+          if [[ "$mode" == "dispatch" ]]; then
+            if [[ -z "$campaign_key" ]]; then
+              echo "campaign_key is required for dispatch-only recovery" >&2
+              exit 1
+            fi
+            echo "Dispatch-only recovery requested for $campaign_key" >> "$GITHUB_STEP_SUMMARY"
+          else
+            python tools/city_campaign.py "${args[@]}"
+          fi
           if [[ -n "$campaign_key" ]]; then
             echo "## City campaign: $campaign_key" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -147,7 +155,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: python tools/city_campaign.py --mode dispatch
+          CAMPAIGN_KEY: ${{ steps.checkpoint.outputs.campaign_key }}
+        run: |
+          args=(--mode dispatch)
+          if [[ -n "$CAMPAIGN_KEY" ]]; then
+            args+=(--campaign-key "$CAMPAIGN_KEY")
+          fi
+          python tools/city_campaign.py "${args[@]}"
 
       - name: Commit campaign checkpoints to the private operations repository
         if: always()
