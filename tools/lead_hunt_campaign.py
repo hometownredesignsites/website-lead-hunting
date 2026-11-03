@@ -291,7 +291,8 @@ def main() -> int:
     parser.add_argument("--capture-google-evidence", action="store_true")
     parser.add_argument("--categories-csv", type=Path, default=Path("config/business_categories.csv"))
     parser.add_argument("--cities-csv", type=Path, default=Path("config/cities.csv"))
-    parser.add_argument("--event-file", type=Path)
+    parser.add_argument("--child-run-id", default="")
+    parser.add_argument("--child-conclusion", default="")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN", ""))
     parser.add_argument("--github-output", type=Path)
@@ -333,29 +334,24 @@ def main() -> int:
         dispatch = True
         save_state(path, state)
     elif args.mode == "after-run":
-        if not args.event_file:
-            raise ValueError("--event-file is required after a lead-hunt workflow run")
-        event = json.loads(args.event_file.read_text(encoding="utf-8-sig"))
-        webhook_run = event.get("workflow_run") or {}
-        webhook_name = str(webhook_run.get("name") or "")
-        if (webhook_run.get("event") != "workflow_dispatch"
-                or not (webhook_name == "ChatGPT website lead hunt"
-                        or webhook_name.startswith("ChatGPT website lead hunt "))):
-            print("Lead-hunt run is not a workflow_dispatch campaign batch; no campaign state changed.")
-            write_outputs(args.github_output, {"run_key": "", "status": "ignored"}, False)
-            return 0
+        if not args.child_run_id or not args.child_conclusion:
+            raise ValueError("--child-run-id and --child-conclusion are required after a lead-hunt batch")
         if not args.repo or not args.token:
             raise ValueError("GITHUB_REPOSITORY and GITHUB_TOKEN are required to resolve campaign metadata")
-        run_details = fetch_workflow_run(args.repo, str(webhook_run.get("id", "")), args.token)
-        event["workflow_run"] = {**webhook_run, **run_details}
-        identity = event_campaign(event, run_details)
+        run_details = fetch_workflow_run(args.repo, args.child_run_id, args.token)
+        identity = event_campaign({"workflow_run": run_details})
         if not identity:
             print("Lead-hunt run is not a campaign batch; no campaign state changed.")
             write_outputs(args.github_output, {"run_key": "", "status": "ignored"}, False)
             return 0
+        if args.ref and run_details.get("head_branch") != args.ref:
+            raise ValueError("Completed lead-hunt run branch does not match the coordinator branch")
+        if args.child_conclusion not in {"success", "failure", "cancelled", "timed_out", "action_required", "neutral", "skipped", "stale"}:
+            raise ValueError("Invalid child workflow conclusion")
+        event = {"workflow_run": {**run_details, "conclusion": args.child_conclusion}}
         event_run_key = identity[0]
         if args.run_key and args.run_key != event_run_key:
-            raise ValueError("Provided run_key does not match campaign metadata in workflow_run event")
+            raise ValueError("Provided run_key does not match campaign metadata in completed run")
         path, state = load_state(repo_dir, event_run_key)
         ensure_inputs_unchanged(state, categories, cities)
         progress_path = path.parent / "LOCATION_CATEGORY_PROGRESS.json"
