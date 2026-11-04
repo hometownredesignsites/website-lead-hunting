@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: website-lead-hunt-private-operations-${{ github.repository }}
+  group: human-high-calibration-${{ github.repository }}
   queue: max
   cancel-in-progress: false
 
