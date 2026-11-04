@@ -6,7 +6,7 @@ from pathlib import Path
 from tools.merge_duckai_visual_reviews import merge
 from tools.prepare_duckai_visual_review import make_review_sheet, validate_source_viewport
 from tools.visual_review_status import classify_attempt
-from tools.validate_duckai_visual_review import validate_image_uploads
+from tools.validate_duckai_visual_review import parse_labeled_text, validate_image_uploads
 from PIL import Image
 
 
@@ -46,6 +46,34 @@ class VisualReviewRecoveryTests(unittest.TestCase):
         context["upload_images"][1]["covers"] = ["desktop_top.jpg", "desktop_mid.jpg"]
         self.assertIn("review sheets do not cover all four source top/mid screenshots exactly",
                       validate_image_uploads(metadata, context)["errors"])
+
+    def test_scorecard_parser_splits_adjacent_labels_and_ignores_chat_footer(self):
+        context = {"candidate_id": "candidate-1", "website_url": "https://example.com"}
+        response = """Visual opportunity score: 78/100
+Verdict: high
+Confidence: medium
+Desktop top observations:
+- Hero image is dark. Desktop mid observations:
+- Text is dense. Mobile top observations:
+- The title is small. Mobile mid observations:
+- Large dark gap appears. Desktop observations:
+- Sections are clear. Mobile observations:
+- Spacing is uneven. Major issues:
+- Mobile hero readability. Positive signals:
+- Strong project photos. Recommended redesign focus:
+- Improve hero legibility. Limitations:
+- Only screenshot views assessed.
+Jump to latest response
+Tools
+"""
+        review = parse_labeled_text(response, context)
+        self.assertEqual(review["visual_opportunity_score"], 78)
+        self.assertEqual(review["visual_verdict"], "high")
+        self.assertEqual(review["desktop_top_observations"], ["Hero image is dark."])
+        self.assertEqual(review["desktop_mid_observations"], ["Text is dense."])
+        self.assertEqual(review["mobile_top_observations"], ["The title is small."])
+        self.assertEqual(review["mobile_mid_observations"], ["Large dark gap appears."])
+        self.assertEqual(review["major_issues"], ["Mobile hero readability."])
 
     def test_batch_workflow_uses_proven_in_session_retry_behavior(self):
         workflow = Path(".github/workflows/chatgpt-visual-review-batch.yml").read_text(encoding="utf-8")

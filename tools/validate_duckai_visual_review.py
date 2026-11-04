@@ -28,6 +28,14 @@ SECTION_KEYS = {
 
 
 def parse_labeled_text(response_text: str, context: dict) -> dict | None:
+    labels = sorted([*SECTION_KEYS.keys(), "visual opportunity score", "verdict", "confidence"],
+                    key=len, reverse=True)
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    response_text = re.sub(
+        rf"(?<!\n)\s+(?=(?:{label_pattern})\s*:)" , "\n", response_text,
+        flags=re.IGNORECASE,
+    )
+    response_text = response_text.split("Jump to latest response", 1)[0]
     score_match = re.search(
         r"^\s*Visual opportunity score\s*:\s*(?:(\d{1,3})\s*(?:/\s*100|out of 100)?|uncertain(?:\s*\(no score\))?)\s*$",
         response_text,
