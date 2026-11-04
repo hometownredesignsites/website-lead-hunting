@@ -16,6 +16,7 @@ from .browser_session import (
 from .diagnostics import save_failure_diagnostics
 from .prompt_contracts import extract_json_payload
 from .recovery import click_retry_if_visible, refresh_chat
+from visual_factor_scoring import has_complete_response_scorecard
 
 
 class ResponseFollowupError(RuntimeError):
@@ -118,8 +119,9 @@ def run_stage_once(
         followup_reason = None
         if not response_text:
             followup_reason = "empty_response"
-        elif (expect_review_score and extract_json_payload(response_text) is None
-              and not re.search(r"^\s*Visual opportunity score\s*:", response_text, re.IGNORECASE | re.MULTILINE)):
+        elif expect_review_score and not has_complete_response_scorecard(
+            response_text, extract_json_payload(response_text)
+        ):
             followup_reason = "missing_scorecard"
         if followup_reason:
             metadata["response_followup_used"] = True
