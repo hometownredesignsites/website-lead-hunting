@@ -19,7 +19,7 @@ from .recovery import click_retry_if_visible, refresh_chat
 
 
 class ResponseFollowupError(RuntimeError):
-    """Raised when ChatGPT stays silent after a same-chat text follow-up."""
+    """Raised when Duck.ai stays silent after a same-chat text follow-up."""
 
 
 def run_stage_once(
@@ -108,7 +108,9 @@ def run_stage_once(
             before_count=before_count,
             before_last_text=before_last_text,
             wait_seconds=wait_seconds,
+            current_prompt=prompt_text,
         )
+        settle_prompt_text = prompt_text
         followup_reason = None
         if not response_text:
             followup_reason = "empty_response"
@@ -121,7 +123,7 @@ def run_stage_once(
             followup_composer = find_chat_composer(page, timeout_ms=timeout_ms)
             if followup_composer is None:
                 raise ResponseFollowupError(
-                    "ChatGPT response needed a follow-up, but no composer was available in the same chat."
+                    "Duck.ai response needed a follow-up, but no composer was available in the same chat."
                 )
             followup_messages = assistant_turns(page)
             followup_before_count = followup_messages.count()
@@ -147,6 +149,7 @@ def run_stage_once(
                     "scorecard without a preamble."
                 )
             send_prompt(page, followup_composer, followup_prompt)
+            settle_prompt_text = followup_prompt
             page.wait_for_timeout(1200)
             followup_messages = assistant_turns(page)
             response_text = wait_for_valid_response(
@@ -155,6 +158,7 @@ def run_stage_once(
                 before_count=followup_before_count,
                 before_last_text=followup_before_last_text,
                 wait_seconds=wait_seconds,
+                current_prompt=followup_prompt,
             )
             if not response_text:
                 raise ResponseFollowupError(
@@ -167,6 +171,7 @@ def run_stage_once(
             post_response_wait_seconds=post_response_wait_seconds,
             response_settle_seconds=response_settle_seconds,
             max_settle_wait_seconds=max_settle_wait_seconds,
+            current_prompt=settle_prompt_text,
         )
         return refreshed or response_text
 

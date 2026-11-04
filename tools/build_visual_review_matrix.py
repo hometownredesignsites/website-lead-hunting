@@ -32,7 +32,7 @@ def parse_candidate_ids(raw: str) -> list[str]:
 
 
 def has_valid_visual_score(row: dict) -> bool:
-    review = row.get("chatgpt_visual_review")
+    review = row.get("duckai_visual_review")
     if not isinstance(review, dict) or review.get("status") != "passed":
         return False
     candidate_id = row.get("candidate_id")
@@ -66,7 +66,7 @@ def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES) -> tu
                 or not is_visual_review_eligible(row)
                 or has_valid_visual_score(row)):
             continue
-        last_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
+        last_attempt = row.get("duckai_visual_review_last_attempt") or {}
         # Recoverable and permanent failures have their own durable retry/failure
         # state; fresh auto-selection must not bypass that accounting.
         if last_attempt.get("status") in {"retry-needed", "failed"}:
@@ -77,7 +77,7 @@ def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES) -> tu
 
 def validate_scheduled_retry(run_dir: Path, candidate_ids: list[str], retry_round: int,
                              retry_request_id: str, source_run_id: str) -> None:
-    queue_path = run_dir / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
+    queue_path = run_dir / "DUCKAI_VISUAL_REVIEW_RETRY_QUEUE.json"
     if not queue_path.is_file():
         raise ValueError("Scheduled retry queue record is missing; refusing an unqueued automatic retry.")
     queue = json.loads(queue_path.read_text(encoding="utf-8-sig"))
@@ -92,7 +92,7 @@ def validate_scheduled_retry(run_dir: Path, candidate_ids: list[str], retry_roun
     invalid = []
     for candidate_id in candidate_ids:
         entry = entries.get(candidate_id) or {}
-        last_attempt = (ledger.get(candidate_id) or {}).get("chatgpt_visual_review_last_attempt") or {}
+        last_attempt = (ledger.get(candidate_id) or {}).get("duckai_visual_review_last_attempt") or {}
         if (entry.get("status") not in {"ready_to_dispatch", "dispatched"}
                 or entry.get("dispatch_request_id") != retry_request_id
                 or int(entry.get("automatic_retry_round", -1)) != retry_round

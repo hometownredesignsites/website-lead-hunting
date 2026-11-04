@@ -8,4 +8,4 @@ config/*
 !config/cities.csv
 !config/cities.example.csv
 runs/
-.playwright-chatgpt-profile/
+.playwright-duckai-profile/

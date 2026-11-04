@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a small screenshot fixture for the ChatGPT guest image-attachment probe."""
+"""Create a small screenshot fixture for the Duck.ai guest image-attachment probe."""
 from __future__ import annotations
 
 import argparse

@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.merge_chatgpt_visual_reviews import merge
-from tools.prepare_chatgpt_visual_review import validate_source_viewport
+from tools.merge_duckai_visual_reviews import merge
+from tools.prepare_duckai_visual_review import validate_source_viewport
 from tools.visual_review_status import classify_attempt
 
 
@@ -13,11 +13,11 @@ class VisualReviewRecoveryTests(unittest.TestCase):
         workflow = Path(".github/workflows/chatgpt-visual-review-batch.yml").read_text(encoding="utf-8")
         review_jobs = workflow.split("\n  notify_city_campaign:", 1)[0]
         self.assertIn("xvfb-run --auto-servernum", workflow)
-        self.assertIn("tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID\"", workflow)
+        self.assertIn("tmp/duckai-visual-review-profile-$REVIEW_CANDIDATE_ID\"", workflow)
         self.assertIn("--allow-retry", workflow)
         self.assertIn("--refresh-before-retry", workflow)
         self.assertNotIn("for attempt in 1 2 3", review_jobs)
-        self.assertNotIn("chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-$attempt", review_jobs)
+        self.assertNotIn("duckai-visual-review-profile-$REVIEW_CANDIDATE_ID-$attempt", review_jobs)
 
     def test_missing_source_artifact_is_a_permanent_candidate_failure(self):
         decision = classify_attempt(
@@ -29,7 +29,7 @@ class VisualReviewRecoveryTests(unittest.TestCase):
         self.assertEqual(decision["status"], "failed")
         self.assertFalse(decision["retryable"])
 
-    def test_missing_source_screenshot_is_not_retried_as_a_chatgpt_failure(self):
+    def test_missing_source_screenshot_is_not_retried_as_a_duckai_failure(self):
         decision = classify_attempt(
             source_artifact_available=True,
             preparation_ok=False,
@@ -40,7 +40,7 @@ class VisualReviewRecoveryTests(unittest.TestCase):
         self.assertEqual(decision["status"], "failed")
         self.assertEqual(decision["failure_class"], "screenshots_unavailable_or_invalid")
 
-    def test_screenshot_viewport_mismatch_is_rejected_before_chatgpt(self):
+    def test_screenshot_viewport_mismatch_is_rejected_before_duckai(self):
         with self.assertRaisesRegex(ValueError, "Desktop screenshot appears mismatched"):
             validate_source_viewport("desktop", 390, 844, Path("mobile.png"))
         with self.assertRaisesRegex(ValueError, "Mobile screenshot appears mismatched"):
@@ -97,7 +97,7 @@ class VisualReviewRecoveryTests(unittest.TestCase):
             preparation_ok=True,
             process_exit_code=1,
             result=None,
-            runner_log_text="Error: ChatGPT did not confirm all uploaded images in its composer",
+            runner_log_text="Error: Duck.ai did not confirm all uploaded images in its composer",
         )
         setup_error = classify_attempt(
             source_artifact_available=True,
@@ -141,8 +141,8 @@ class VisualReviewRecoveryTests(unittest.TestCase):
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["retry_needed"], 1)
         self.assertEqual(result["candidate_ids_by_status"]["retry-needed"], ["candidate-1"])
-        self.assertEqual(row["chatgpt_visual_review_last_attempt"]["status"], "retry-needed")
-        self.assertEqual(row["chatgpt_visual_review_last_attempt"]["failure_class"],
+        self.assertEqual(row["duckai_visual_review_last_attempt"]["status"], "retry-needed")
+        self.assertEqual(row["duckai_visual_review_last_attempt"]["failure_class"],
                          "review_artifact_missing_or_run_interrupted")
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and summarize a saved ChatGPT lead-hunt run."""
+"""Validate and summarize a saved Duck.ai lead-hunt run."""
 from __future__ import annotations
 
 import argparse
@@ -123,12 +123,12 @@ def audit_run(run_dir: Path) -> dict:
     if manifest.get("google_evidence_enabled"):
         google_indices = {int(row["query_index"]) for row in google_rows if row.get("query_index") is not None}
         if len(google_indices) < min(expected, len(queries)):
-            warnings.append(f"Google evidence is present for {len(google_indices)} of {min(expected, len(queries))} recorded ChatGPT queries")
+            warnings.append(f"Google evidence is present for {len(google_indices)} of {min(expected, len(queries))} recorded Duck.ai queries")
     if google_rows:
         for google_row in google_rows:
             query_row = query_by_index.get(int(google_row.get("query_index", 0)))
             if query_row and google_row.get("exact_query") != query_row.get("query"):
-                errors.append(f"Google evidence query {google_row.get('query_index')} does not match its ChatGPT query text")
+                errors.append(f"Google evidence query {google_row.get('query_index')} does not match its Duck.ai query text")
 
     candidate_domains = [str(row.get("domain") or "").lower() for row in candidates]
     candidate_domains = [domain for domain in candidate_domains if domain]
@@ -139,8 +139,8 @@ def audit_run(run_dir: Path) -> dict:
     site_statuses = Counter(str(row.get("site_check_status") or "unknown") for row in candidates)
     human_reviews = Counter(review_status(row, "human_review") for row in candidates)
     hermes_reviews = Counter(review_status(row, "hermes_visual_review") for row in candidates)
-    chatgpt_reviews = Counter(review_status(row, "chatgpt_visual_review") for row in candidates)
-    chatgpt_review_attempts = Counter(review_status(row, "chatgpt_visual_review_last_attempt") for row in candidates)
+    duckai_reviews = Counter(review_status(row, "duckai_visual_review") for row in candidates)
+    duckai_review_attempts = Counter(review_status(row, "duckai_visual_review_last_attempt") for row in candidates)
     audit_names = ("http_links_and_resources", "broken_images", "contact_form_privacy",
                    "contact_email_opportunity",
                    "broken_links_and_interactions", "latest_blog_post", "content_freshness",
@@ -215,8 +215,8 @@ def audit_run(run_dir: Path) -> dict:
         "consumer_email_domain_mismatch_candidates": consumer_email_domain_mismatches,
         "human_review_statuses": dict(sorted(human_reviews.items())),
         "hermes_visual_review_statuses": dict(sorted(hermes_reviews.items())),
-        "chatgpt_visual_review_statuses": dict(sorted(chatgpt_reviews.items())),
-        "chatgpt_visual_review_attempt_statuses": dict(sorted(chatgpt_review_attempts.items())),
+        "duckai_visual_review_statuses": dict(sorted(duckai_reviews.items())),
+        "duckai_visual_review_attempt_statuses": dict(sorted(duckai_review_attempts.items())),
         "candidate_screenshots_present": screenshots_present,
         "candidate_screenshot_paths": screenshot_paths,
         "screenshots_purged_at": manifest.get("screenshots_purged_at"),
@@ -246,7 +246,7 @@ def summary_markdown(summary: dict) -> str:
              f"- **Returned candidates:** {summary['results_returned']}",
              f"- **Unique candidate sites:** {summary['unique_candidate_domains']}",
              f"- **Sites directly assessed:** {summary['results_site_assessed']}",
-             f"- **Reported search-engine counts available:** {'yes' if summary['reported_result_counts_available'] else 'no (ChatGPT discovery does not expose this count)'}",
+             f"- **Reported search-engine counts available:** {'yes' if summary['reported_result_counts_available'] else 'no (Duck.ai discovery does not expose this count)'}",
              f"- **Google comparison rows:** {summary['google_evidence_rows']}",
              f"- **Google reported-result counts available:** {'yes' if summary['google_reported_result_counts_available'] else 'no'}",
              f"- **Screenshot commits enabled:** {summary['screenshots_commit_enabled']}",
@@ -264,8 +264,8 @@ def summary_markdown(summary: dict) -> str:
     lines.extend(["", "## Candidate review", "", "| Review state | Count |", "|---|---:|"])
     review_states = {f"Human: {key}": value for key, value in summary["human_review_statuses"].items()}
     review_states.update({f"Hermes visual: {key}": value for key, value in summary["hermes_visual_review_statuses"].items()})
-    review_states.update({f"ChatGPT visual scorecard: {key}": value for key, value in summary["chatgpt_visual_review_statuses"].items()})
-    review_states.update({f"ChatGPT visual last attempt: {key}": value for key, value in summary["chatgpt_visual_review_attempt_statuses"].items()})
+    review_states.update({f"Duck.ai visual scorecard: {key}": value for key, value in summary["duckai_visual_review_statuses"].items()})
+    review_states.update({f"Duck.ai visual last attempt: {key}": value for key, value in summary["duckai_visual_review_attempt_statuses"].items()})
     lines.extend(f"| {status} | {count} |" for status, count in sorted(review_states.items()))
     lines.extend(["", "## Automated website checks", "",
                   f"Structured site checks are available for {summary['site_audit_candidates']}/{summary['unique_candidate_domains']} candidates. Findings are evidence; they do not replace human visual review.",

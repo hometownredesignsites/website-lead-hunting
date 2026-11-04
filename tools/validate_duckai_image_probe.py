@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check whether ChatGPT accepted and correctly read the guest image probe."""
+"""Check whether Duck.ai accepted and correctly read the guest image probe."""
 from __future__ import annotations
 
 import argparse

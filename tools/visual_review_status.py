@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Classify one isolated ChatGPT visual-review attempt."""
+"""Classify one isolated Duck.ai visual-review attempt."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -15,7 +15,8 @@ IDENTITY_ERRORS = (
     "candidate context must list exactly four",
 )
 TRANSIENT_RUNNER_MARKERS = (
-    "chatgpt did not confirm all uploaded images",
+    "duck.ai did not confirm all uploaded images",
+    "duck.ai did not visibly confirm the selected image attachments",
     "response remained empty",
     "could not find composer",
     "timed out",
@@ -50,7 +51,7 @@ def classify_attempt(
     """Return a durable status and whether another fresh-session attempt is useful.
 
     Missing source files and invalid candidate identity are deterministic input or
-    integrity failures. ChatGPT transport, blank/invalid output, and image-upload
+    integrity failures. Duck.ai transport, blank/invalid output, and image-upload
     confirmation failures can recover in a clean browser session.
     """
     if not source_artifact_available:
@@ -95,7 +96,7 @@ def classify_attempt(
     transient_marker = next((marker for marker in TRANSIENT_RUNNER_MARKERS if marker in log_lower), None)
     if process_exit_code in {124, 130, 137, 143} or transient_marker:
         return {"status": RETRY, "retryable": True,
-                "failure_class": "chatgpt_interrupted_or_unavailable",
+                "failure_class": "duckai_interrupted_or_unavailable",
                 "error": (f"Runner reported a transient failure ({transient_marker})."
                           if transient_marker else
                           f"Runner was interrupted or timed out (exit {process_exit_code}).")}

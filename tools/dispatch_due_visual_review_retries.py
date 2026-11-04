@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dispatch due, recoverable ChatGPT visual reviews from durable run queues."""
+"""Dispatch due, recoverable Duck.ai visual reviews from durable run queues."""
 from __future__ import annotations
 
 import argparse
@@ -94,7 +94,7 @@ def process(workspace: Path, repository: str, token: str, ref: str, *, dispatch_
     now = utcnow()
     due_groups: dict[tuple, list[tuple[Path, dict]]] = {}
     changed_queues: dict[Path, dict] = {}
-    queue_paths = sorted(workspace.glob("runs/*/CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"))
+    queue_paths = sorted(workspace.glob("runs/*/DUCKAI_VISUAL_REVIEW_RETRY_QUEUE.json"))
 
     for queue_path in queue_paths:
         try:
@@ -131,7 +131,7 @@ def process(workspace: Path, repository: str, token: str, ref: str, *, dispatch_
                 if not_before > now:
                     continue
             row = candidates.get(entry.get("candidate_id"))
-            latest = (row or {}).get("chatgpt_visual_review_last_attempt") or {}
+            latest = (row or {}).get("duckai_visual_review_last_attempt") or {}
             if (not row or latest.get("status") != "retry-needed"
                     or str(latest.get("review_workflow_run_id")) != str(entry.get("last_review_workflow_run_id"))):
                 entry.update({"status": "superseded", "not_before": None,

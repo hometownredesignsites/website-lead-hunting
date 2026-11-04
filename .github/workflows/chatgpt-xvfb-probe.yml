@@ -1,15 +1,15 @@
-name: ChatGPT Xvfb runner check
+name: Duck.ai Xvfb runner check
 
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: "Prompt to submit using the ChatGPT guest browser runner"
+        description: "Prompt to submit using the Duck.ai guest browser runner"
         required: true
         default: "Find independent kitchen remodelers serving Westminster, Colorado, with direct official website URLs and source URLs supporting service in the area. Do not invent businesses or URLs."
         type: string
       attach_test_image:
-        description: "Attach a temporary screenshot and check whether ChatGPT can read it"
+        description: "Attach a temporary screenshot and check whether Duck.ai can read it"
         required: true
         default: false
         type: boolean
@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: chatgpt-xvfb-probe-${{ github.ref }}
+  group: duckai-xvfb-probe-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -57,14 +57,14 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -r requirements.txt
           python -m playwright install chromium
-          mkdir -p artifacts/chatgpt-xvfb-probe tmp
-          rm -rf tmp/chatgpt-probe-profile
+          mkdir -p artifacts/duckai-xvfb-probe tmp
+          rm -rf tmp/duckai-probe-profile
 
       - name: Create a temporary screenshot fixture when requested
         if: inputs.attach_test_image
         run: |
-          python tools/create_chatgpt_image_probe.py \
-            --output artifacts/chatgpt-xvfb-probe/image-probe.png
+          python tools/create_duckai_image_probe.py \
+            --output artifacts/duckai-xvfb-probe/image-probe.png
 
       - name: Validate saved-candidate selection
         if: inputs.review_saved_candidate
@@ -112,23 +112,23 @@ jobs:
             exit 1
           fi
           echo "Using lead-hunt artifact from Actions run $REVIEW_SOURCE_RUN_ID."
-          python tools/prepare_chatgpt_visual_review.py \
+          python tools/prepare_duckai_visual_review.py \
             --run-dir "$ARTIFACT_RUN_DIR" \
             --candidate-id "$REVIEW_CANDIDATE_ID" \
-            --output-dir artifacts/chatgpt-xvfb-probe/website-review
+            --output-dir artifacts/duckai-xvfb-probe/website-review
 
-      - name: Submit prompt with the ChatGPT runner under Xvfb
+      - name: Submit prompt with the Duck.ai runner under Xvfb
         id: probe
         shell: bash
         env:
-          CHATGPT_PROMPT: ${{ inputs.prompt }}
+          DUCKAI_PROMPT: ${{ inputs.prompt }}
           ATTACH_TEST_IMAGE: ${{ inputs.attach_test_image }}
           REVIEW_SAVED_CANDIDATE: ${{ inputs.review_saved_candidate }}
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
-          root = Path("artifacts/chatgpt-xvfb-probe")
+          root = Path("artifacts/duckai-xvfb-probe")
           attach_image = os.environ["ATTACH_TEST_IMAGE"].lower() == "true"
           review_candidate = os.environ["REVIEW_SAVED_CANDIDATE"].lower() == "true"
           if attach_image and review_candidate:
@@ -140,14 +140,14 @@ jobs:
               "Inspect the attached screenshot and return exactly this JSON: "
               "{\"visible_code\":\"...\",\"circle_color\":\"...\"}. "
               "If you cannot access the image, return {\"error\":\"image_not_accessible\"}. Do not guess."
-              if attach_image else os.environ["CHATGPT_PROMPT"]
+              if attach_image else os.environ["DUCKAI_PROMPT"]
           )
           instructions = (
               (review_dir / "instructions.txt").read_text(encoding="utf-8").strip()
               if review_candidate else
               "Read the attached screenshot. Answer only from visible image content."
               if attach_image else
-              "Use ChatGPT web search when the prompt asks for current local businesses. "
+              "Use Duck.ai web search when the prompt asks for current local businesses. "
               "Return the answer directly and do not invent URLs or evidence."
           )
           (root / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
@@ -155,16 +155,16 @@ jobs:
           PY
           image_args=()
           if [[ "$ATTACH_TEST_IMAGE" == "true" ]]; then
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/image-probe.png)
+            image_args+=(--image-file artifacts/duckai-xvfb-probe/image-probe.png)
           elif [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop_top.jpg)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop_mid.jpg)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile_top.jpg)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile_mid.jpg)
+            image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/desktop_top.jpg)
+            image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/desktop_mid.jpg)
+            image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/mobile_top.jpg)
+            image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/mobile_mid.jpg)
           fi
           context_args=()
           if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
-            context_args+=(--context-file artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json)
+            context_args+=(--context-file artifacts/duckai-xvfb-probe/website-review/candidate-context.json)
           fi
           response_contract_args=()
           if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
@@ -172,16 +172,16 @@ jobs:
           fi
           set +e
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python tools/chatgpt_file_playwright_anonymous_ci.py \
-              --stage-name chatgpt_runner_check \
-              --input-file artifacts/chatgpt-xvfb-probe/prompt.txt \
-              --instructions-file artifacts/chatgpt-xvfb-probe/instructions.txt \
+            python tools/duckai_file_playwright_anonymous_ci.py \
+              --stage-name duckai_runner_check \
+              --input-file artifacts/duckai-xvfb-probe/prompt.txt \
+              --instructions-file artifacts/duckai-xvfb-probe/instructions.txt \
               "${context_args[@]}" \
-              --output-file artifacts/chatgpt-xvfb-probe/response.md \
-              --metadata-output-file artifacts/chatgpt-xvfb-probe/metadata.json \
-              --success-screenshot artifacts/chatgpt-xvfb-probe/chatgpt-response.png \
-              --error-screenshot artifacts/chatgpt-xvfb-probe/chatgpt-error.png \
-              --user-data-dir tmp/chatgpt-probe-profile \
+              --output-file artifacts/duckai-xvfb-probe/response.md \
+              --metadata-output-file artifacts/duckai-xvfb-probe/metadata.json \
+              --success-screenshot artifacts/duckai-xvfb-probe/duckai-response.png \
+              --error-screenshot artifacts/duckai-xvfb-probe/duckai-error.png \
+              --user-data-dir tmp/duckai-probe-profile \
               --allow-retry \
               --refresh-before-retry \
               --wait-seconds 70 \
@@ -193,16 +193,16 @@ jobs:
               "${image_args[@]}"
           probe_rc=$?
           if [[ "$probe_rc" -eq 0 && "$ATTACH_TEST_IMAGE" == "true" ]]; then
-            python tools/validate_chatgpt_image_probe.py \
-              --response artifacts/chatgpt-xvfb-probe/response.md \
-              --metadata artifacts/chatgpt-xvfb-probe/metadata.json \
-              --output artifacts/chatgpt-xvfb-probe/probe-result.json || probe_rc=$?
+            python tools/validate_duckai_image_probe.py \
+              --response artifacts/duckai-xvfb-probe/response.md \
+              --metadata artifacts/duckai-xvfb-probe/metadata.json \
+              --output artifacts/duckai-xvfb-probe/probe-result.json || probe_rc=$?
           elif [[ "$probe_rc" -eq 0 && "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
-            python tools/validate_chatgpt_visual_review.py \
-              --response artifacts/chatgpt-xvfb-probe/response.md \
-              --metadata artifacts/chatgpt-xvfb-probe/metadata.json \
-              --context artifacts/chatgpt-xvfb-probe/website-review/candidate-context.json \
-              --output artifacts/chatgpt-xvfb-probe/website-review/review-result.json || probe_rc=$?
+            python tools/validate_duckai_visual_review.py \
+              --response artifacts/duckai-xvfb-probe/response.md \
+              --metadata artifacts/duckai-xvfb-probe/metadata.json \
+              --context artifacts/duckai-xvfb-probe/website-review/candidate-context.json \
+              --output artifacts/duckai-xvfb-probe/website-review/review-result.json || probe_rc=$?
           fi
           echo "exit_code=$probe_rc" >> "$GITHUB_OUTPUT"
           exit 0
@@ -211,13 +211,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: chatgpt-xvfb-probe-${{ github.run_id }}
-          path: artifacts/chatgpt-xvfb-probe/
+          name: duckai-xvfb-probe-${{ github.run_id }}
+          path: artifacts/duckai-xvfb-probe/
           if-no-files-found: warn
           retention-days: 7
 
       - name: Report probe outcome
         if: always() && steps.probe.outputs.exit_code != '0'
         run: |
-          echo "ChatGPT runner, image-recognition, or visual-review check failed. Review the uploaded response and diagnostics."
+          echo "Duck.ai runner, image-recognition, or visual-review check failed. Review the uploaded response and diagnostics."
           exit 1

@@ -139,8 +139,8 @@ def event_campaign(event: dict, run_details: dict | None = None) -> tuple[str, i
     run_name = str(run.get("name") or "")
     workflow_path = str(run.get("path") or "").split("@", 1)[0]
     if (run.get("event") != "workflow_dispatch"
-            or not (run_name == "ChatGPT website lead hunt"
-                    or run_name.startswith("ChatGPT website lead hunt "))
+            or not (run_name == "Duck.ai website lead hunt"
+                    or run_name.startswith("Duck.ai website lead hunt "))
             or (workflow_path and workflow_path != ".github/workflows/lead-hunt.yml")):
         return None
     title = str(run.get("display_title") or "")

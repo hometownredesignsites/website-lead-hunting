@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare an auditable ChatGPT visual review from a saved candidate record."""
+"""Prepare an auditable Duck.ai visual review from a saved candidate record."""
 from __future__ import annotations
 
 import argparse

@@ -316,7 +316,7 @@ def parse_search_results(items: list[dict]) -> list[dict]:
     return results
 
 
-def fingerprint(queries: list[dict], region: str, engine: str = "chatgpt_web_ui") -> str:
+def fingerprint(queries: list[dict], region: str, engine: str = "duckai_web_ui") -> str:
     payload = json.dumps({"queries": queries, "region": region, "engine": engine}, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -682,8 +682,8 @@ def save_run(run_dir: Path, queries: list[dict], records: dict[int, dict], candi
     return progress
 
 
-CHATGPT_INSTRUCTIONS = """You are researching local businesses for a human-reviewed website assessment.
-Use ChatGPT web search to identify independent local businesses that match the category and
+DUCKAI_INSTRUCTIONS = """You are researching local businesses for a human-reviewed website assessment.
+Use Duck.ai web search to identify independent local businesses that match the category and
 serve the specified location. Return direct official business website URLs, never directory,
 marketplace, social-media, or aggregator URLs. Include the source URLs that support the business
 identity, official website, and service area. Do not invent names, URLs, citations, or evidence.
@@ -693,7 +693,7 @@ Return only one valid JSON object matching this schema:
 If none can be verified, return {"businesses":[],"limitations":"..."}."""
 
 
-def build_chatgpt_prompt(query: dict, limit: int) -> str:
+def build_duckai_prompt(query: dict, limit: int) -> str:
     return (f"Find up to {limit} businesses for this search.\n"
             f"Category: {query['category']}\nLocation: {query['location']}\n"
             "Use web search and prefer independent businesses serving this exact area. "
@@ -771,17 +771,17 @@ async def capture_google_search_evidence(page, query: dict, run_dir: Path,
     return row
 
 
-def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
+def run_duckai_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
                           result_limit: int) -> tuple[list[dict], dict]:
-    """Run the ChatGPT browser runner under the workflow's Xvfb display."""
+    """Run the Duck.ai browser runner under the workflow's Xvfb display."""
     index = int(query["query_index"])
-    query_dir = run_dir / "chatgpt" / f"query_{index:04d}"
+    query_dir = run_dir / "duckai" / f"query_{index:04d}"
     query_dir.mkdir(parents=True, exist_ok=True)
     prompt_file = query_dir / "prompt.txt"
-    prompt_file.write_text(build_chatgpt_prompt(query, result_limit) + "\n", encoding="utf-8")
+    prompt_file.write_text(build_duckai_prompt(query, result_limit) + "\n", encoding="utf-8")
     instructions_file = query_dir / "instructions.txt"
-    instructions_file.write_text(CHATGPT_INSTRUCTIONS + "\n", encoding="utf-8")
-    runner = Path(__file__).resolve().with_name("chatgpt_file_playwright_anonymous_ci.py")
+    instructions_file.write_text(DUCKAI_INSTRUCTIONS + "\n", encoding="utf-8")
+    runner = Path(__file__).resolve().with_name("duckai_file_playwright_anonymous_ci.py")
     results: list[dict] = []
     attempt_records = []
     last_error = ""
@@ -792,10 +792,10 @@ def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
         output_file = attempt_dir / "response.md"
         parsed_file = attempt_dir / "response.json"
         metadata_file = attempt_dir / "metadata.json"
-        screenshot_file = attempt_dir / "chatgpt-response.png"
+        screenshot_file = attempt_dir / "duckai-response.png"
         error_screenshot = attempt_dir / "playwright-error.png"
         error_html = attempt_dir / "playwright-error.html"
-        with tempfile.TemporaryDirectory(prefix=f"chatgpt-profile-{index:04d}-") as profile:
+        with tempfile.TemporaryDirectory(prefix=f"duckai-profile-{index:04d}-") as profile:
             command = [
                 sys.executable, str(runner),
                 "--stage-name", f"lead_hunt_query_{index:04d}",
@@ -833,7 +833,7 @@ def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
             payload = json.loads(parsed_file.read_text(encoding="utf-8"))
             businesses = payload.get("businesses", payload.get("results", payload.get("candidates", [])))
             if not isinstance(businesses, list):
-                raise ValueError("ChatGPT JSON must contain a businesses array")
+                raise ValueError("Duck.ai JSON must contain a businesses array")
             for item in businesses[:result_limit]:
                 if not isinstance(item, dict):
                     continue
@@ -864,7 +864,7 @@ def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
                 })
             attempt_record["parsed_business_count"] = len(results)
             attempt_records.append(attempt_record)
-            logger.emit("chatgpt_discovery_completed", query_index=index, attempt=attempt,
+            logger.emit("duckai_discovery_completed", query_index=index, attempt=attempt,
                         candidate_count=len(results), duration_ms=duration_ms,
                         response_file=attempt_record["response_file"], screenshot=attempt_record["screenshot"])
             metadata = json.loads(metadata_file.read_text(encoding="utf-8")) if metadata_file.exists() else {}
@@ -876,18 +876,18 @@ def run_chatgpt_discovery(query: dict, run_dir: Path, logger: BehaviorLogger,
                              "response_screenshot": attempt_record["screenshot"],
                              "runner_metadata_file": str(metadata_file.relative_to(run_dir)).replace("\\", "/"),
                              "runner_metadata": metadata,
-                             "chatgpt_limitations": str(payload.get("limitations") or "")[:1200]}
+                             "duckai_limitations": str(payload.get("limitations") or "")[:1200]}
         last_error = ((completed.stderr or completed.stdout or f"runner exit code {completed.returncode}").strip())[-2000:]
         attempt_record["error"] = last_error
         attempt_records.append(attempt_record)
-        logger.emit("chatgpt_discovery_attempt_failed", query_index=index, attempt=attempt,
+        logger.emit("duckai_discovery_attempt_failed", query_index=index, attempt=attempt,
                     exit_code=completed.returncode, duration_ms=duration_ms, error=last_error[:500],
                     error_screenshot=attempt_record["error_screenshot"])
 
     raise RuntimeError(json.dumps({"error": last_error, "attempt_history": attempt_records}, ensure_ascii=False))
 
 
-async def run_chatgpt_batch(args: argparse.Namespace) -> int:
+async def run_duckai_batch(args: argparse.Namespace) -> int:
     from playwright.async_api import async_playwright
 
     run_dir = args.state_dir.resolve()
@@ -904,15 +904,15 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
     input_sources = ({"categories": csv_input_metadata(args.categories_csv, "category"),
                       "cities": csv_input_metadata(args.cities_csv, "city")}
                      if args.categories_csv and args.cities_csv else {})
-    manifest = {"run_key": run_dir.name, "region": args.region, "engine": "chatgpt_web_ui",
+    manifest = {"run_key": run_dir.name, "region": args.region, "engine": "duckai_web_ui",
                 "categories": categories, "locations": locations,
-                "configured_queries": len(queries), "input_fingerprint": fingerprint(queries, args.region, "chatgpt_web_ui"),
+                "configured_queries": len(queries), "input_fingerprint": fingerprint(queries, args.region, "duckai_web_ui"),
                 "input_sources": input_sources,
                 "google_evidence_enabled": bool(args.capture_google_evidence),
                 "commit_screenshots_enabled": False,
-                "workflow": "GitHub Actions Playwright headed Chromium under Xvfb; ChatGPT response runner",
+                "workflow": "GitHub Actions Playwright headed Chromium under Xvfb; Duck.ai response runner",
                 "created_at": now_iso(), "updated_at": now_iso(), "automated_scoring_is_final": False,
-                "review_policy": "ChatGPT discovery evidence, direct-site signals, Hermes visual review, and human decisions remain separate"}
+                "review_policy": "Duck.ai discovery evidence, direct-site signals, Hermes visual review, and human decisions remain separate"}
     if manifest_path.exists():
         prior = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         if prior.get("input_fingerprint") != manifest["input_fingerprint"]:
@@ -939,8 +939,8 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
     batch = pending[:args.max_queries]
     logger.emit("batch_configuration", configured_query_count=len(queries), pending_query_count=len(pending),
                 selected_query_count=len(batch), max_queries=args.max_queries,
-                max_sites_per_query=args.max_sites_per_query, search_engine="chatgpt_web_ui",
-                browser_runner="ChatGPT Playwright runner", display="Xvfb")
+                max_sites_per_query=args.max_sites_per_query, search_engine="duckai_web_ui",
+                browser_runner="Duck.ai Playwright runner", display="Xvfb")
     if not batch:
         progress = save_run(run_dir, queries, records, candidates, manifest)
         logger.emit("batch_no_pending_queries")
@@ -970,7 +970,7 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
             await context.route("**/*", guard_local_navigation)
             page = await context.new_page()
             logger.emit("browser_ready", browser="playwright_chromium_headed", display="xvfb",
-                        site_navigation="direct URL after ChatGPT extraction", result_link_clicks=0)
+                        site_navigation="direct URL after Duck.ai extraction", result_link_clicks=0)
             for query in batch:
                 idx = query["query_index"]
                 if args.capture_google_evidence and idx not in google_records:
@@ -979,26 +979,26 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
                                  [google_records[key] for key in sorted(google_records)])
                 if query_is_complete(records.get(idx, {})):
                     continue
-                row = {"query_index": idx, **query, "search_engine": "chatgpt_web_ui",
+                row = {"query_index": idx, **query, "search_engine": "duckai_web_ui",
                        "terminal_status": "in_progress", "organic_results_returned_count": 0,
                        "organic_results_inspected_count": 0, "organic_results": [],
                        "started_at": now_iso(), "timestamp": now_iso()}
                 records[idx] = row
                 save_run(run_dir, queries, records, candidates, manifest)
-                logger.emit("chatgpt_discovery_started", query_index=idx, category=query["category"], location=query["location"])
+                logger.emit("duckai_discovery_started", query_index=idx, category=query["category"], location=query["location"])
                 try:
-                    results, chatgpt_evidence = await asyncio.to_thread(
-                        run_chatgpt_discovery, query, run_dir, logger, max(args.max_sites_per_query * 2, 10))
-                    row.update(chatgpt_evidence)
+                    results, duckai_evidence = await asyncio.to_thread(
+                        run_duckai_discovery, query, run_dir, logger, max(args.max_sites_per_query * 2, 10))
+                    row.update(duckai_evidence)
                     row["organic_results_returned_count"] = len(results)
                     if not results:
                         row.update({"terminal_status": "no_results", "finished_at": now_iso(),
-                                    "error": "ChatGPT returned valid JSON without any business URLs"})
+                                    "error": "Duck.ai returned valid JSON without any business URLs"})
                         records[idx] = row
                         save_run(run_dir, queries, records, candidates, manifest)
                         continue
                     dispositions = [classify_result(result, exclusions)[0] for result in results]
-                    logger.emit("chatgpt_results_extracted", query_index=idx, result_count=len(results),
+                    logger.emit("duckai_results_extracted", query_index=idx, result_count=len(results),
                                 excluded_count=dispositions.count("directory_or_lead_generation"),
                                 eligible_count=dispositions.count("eligible_for_site_check"),
                                 site_visit_cap=args.max_sites_per_query)
@@ -1008,7 +1008,7 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
                         disposition, reason_text = classify_result(result, exclusions)
                         result["result_disposition"] = disposition
                         result["disposition_reason"] = reason_text
-                        logger.emit("chatgpt_result_classified", query_index=idx,
+                        logger.emit("duckai_result_classified", query_index=idx,
                                     result_position=result["position"], domain=result.get("domain"), disposition=disposition)
                         if disposition != "eligible_for_site_check" or eligible_sites >= args.max_sites_per_query:
                             if disposition == "eligible_for_site_check":
@@ -1044,17 +1044,17 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
                                              "source_result_url": (result.get("source_urls") or [result["raw_url"]])[0],
                                              "source_result_title": result["title"],
                                              "source_result_snippet": result["snippet"], "source_result_position": result["position"],
-                                             "chatgpt_source_urls": result.get("source_urls", []),
-                                             "chatgpt_official_website_url": result.get("raw_url", ""),
-                                             "chatgpt_service_area_evidence": result.get("service_area_evidence", ""),
-                                             "discovery_method": "chatgpt_web_ui", **site,
+                                             "duckai_source_urls": result.get("source_urls", []),
+                                             "duckai_official_website_url": result.get("raw_url", ""),
+                                             "duckai_service_area_evidence": result.get("service_area_evidence", ""),
+                                             "discovery_method": "duckai_web_ui", **site,
                                              "market_evidence": "pending_review", "human_review": "pending",
                                              "hermes_visual_review": "pending", "recorded_at": now_iso()}
                                 candidates.append(candidate)
                                 candidate_by_domain[candidate["domain"].lower()] = candidate
                                 result["candidate_domain"] = candidate["domain"]
                                 result["result_disposition"] = "site_assessed"
-                                result["disposition_reason"] = "ChatGPT discovery followed by direct-site assessment; market fit and final verdict remain pending"
+                                result["disposition_reason"] = "Duck.ai discovery followed by direct-site assessment; market fit and final verdict remain pending"
                         inspected += 1
                         row.update({"organic_results": results, "organic_results_inspected_count": inspected,
                                     "updated_at": now_iso()})
@@ -1064,15 +1064,15 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
                                 "organic_results": results, "organic_results_inspected_count": inspected})
                     records[idx] = row
                     save_run(run_dir, queries, records, candidates, manifest)
-                    logger.emit("chatgpt_query_completed", query_index=idx, result_count=len(results),
+                    logger.emit("duckai_query_completed", query_index=idx, result_count=len(results),
                                 direct_sites_checked=eligible_sites, status="success")
                 except Exception as exc:
-                    logger.emit("chatgpt_query_failed", query_index=idx, exception_type=type(exc).__name__)
+                    logger.emit("duckai_query_failed", query_index=idx, exception_type=type(exc).__name__)
                     row.update({"terminal_status": "error", "finished_at": now_iso(),
                                 "error": f"{type(exc).__name__}: {exc}"[:2500]})
                     records[idx] = row
                     save_run(run_dir, queries, records, candidates, manifest)
-                    print(f"ChatGPT query {idx} failed: {row['error']}", file=sys.stderr, flush=True)
+                    print(f"Duck.ai query {idx} failed: {row['error']}", file=sys.stderr, flush=True)
             await context.close()
             await browser.close()
     finally:
@@ -1084,8 +1084,8 @@ async def run_chatgpt_batch(args: argparse.Namespace) -> int:
 
 
 async def run_batch(args: argparse.Namespace) -> int:
-    if args.engine == "chatgpt":
-        return await run_chatgpt_batch(args)
+    if args.engine == "duckai":
+        return await run_duckai_batch(args)
     return await run_duckduckgo_batch(args)
 
 
@@ -1322,8 +1322,8 @@ async def run_duckduckgo_batch(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", choices=("chatgpt", "duckduckgo"), default="chatgpt",
-                        help="Discovery source (ChatGPT browser is the default)")
+    parser.add_argument("--engine", choices=("duckai", "duckduckgo"), default="duckai",
+                        help="Discovery source (Duck.ai browser is the default)")
     parser.add_argument("--categories", help="One category per line (legacy inline input)")
     parser.add_argument("--locations", help="One named location per line (legacy inline input)")
     parser.add_argument("--categories-csv", type=Path, help="CSV with a 'category' column")

@@ -1,5 +1,5 @@
-name: ChatGPT website lead hunt
-run-name: ChatGPT website lead hunt ${{ inputs.run_key }} campaign=${{ inputs.campaign_key || inputs.city_campaign_key }} batch=${{ inputs.campaign_batch }} attempt=${{ inputs.campaign_attempt }}
+name: Duck.ai website lead hunt
+run-name: Duck.ai website lead hunt ${{ inputs.run_key }} campaign=${{ inputs.campaign_key || inputs.city_campaign_key }} batch=${{ inputs.campaign_batch }} attempt=${{ inputs.campaign_attempt }}
 
 on:
   workflow_dispatch:
@@ -95,7 +95,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: hometownredesignsites/website-lead-hunting-operations
-          ref: main
+          ref: git-duckai
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results
@@ -144,7 +144,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run bounded ChatGPT research and website assessment batch
+      - name: Run bounded Duck.ai research and website assessment batch
         id: scan
         shell: bash
         env:
@@ -207,7 +207,7 @@ jobs:
           set +e
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python tools/lead_hunt.py \
-              --engine chatgpt \
+              --engine duckai \
               --categories-csv "$categories_csv" \
               --cities-csv "$cities_csv" \
               --region "$REGION" \

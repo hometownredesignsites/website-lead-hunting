@@ -18,9 +18,9 @@ def candidate(candidate_id, *, priority="medium", last_status=None, scored=False
     if hero_media_status:
         row["hero_media"] = {"status": hero_media_status}
     if last_status:
-        row["chatgpt_visual_review_last_attempt"] = {"status": last_status}
+        row["duckai_visual_review_last_attempt"] = {"status": last_status}
     if scored:
-        row["chatgpt_visual_review"] = {
+        row["duckai_visual_review"] = {
             "status": "passed",
             "candidate_id": candidate_id,
             "visual_opportunity_score": 52,

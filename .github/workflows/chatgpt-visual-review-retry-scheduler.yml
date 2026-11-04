@@ -1,4 +1,4 @@
-name: Schedule ChatGPT visual review retries
+name: Schedule Duck.ai visual review retries
 
 on:
   schedule:
@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: hometownredesignsites/website-lead-hunting-operations
-          ref: main
+          ref: git-duckai
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results
@@ -50,7 +50,7 @@ jobs:
           PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
           python tools/private_results.py commit-runs --private-repo private-results \
-            --message "Update ChatGPT visual review retry queue"
+            --message "Update Duck.ai visual review retry queue"
 
       - name: Dispatch committed retry reservations
         env:
@@ -66,4 +66,4 @@ jobs:
           PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
           python tools/private_results.py commit-runs --private-repo private-results \
-            --message "Record ChatGPT visual review retry dispatch"
+            --message "Record Duck.ai visual review retry dispatch"

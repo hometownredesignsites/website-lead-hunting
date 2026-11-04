@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage-capable Playwright runner for ChatGPT guest browser execution."""
+"""Stage-capable Playwright runner for Duck.ai guest browser execution."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def ensure_browser_installed() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a named Playwright stage against ChatGPT as guest.")
+    parser = argparse.ArgumentParser(description="Run a named Playwright stage against Duck.ai as guest.")
     parser.add_argument("--stage-name", default="generic")
     parser.add_argument("--input-file", required=True)
     parser.add_argument("--instructions-file")
@@ -42,24 +42,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expect-review-score", action="store_true")
     parser.add_argument("--fail-if-invalid-json", action="store_true")
     parser.add_argument("--response-mode", default="text", choices=["text", "markdown", "json"])
-    parser.add_argument("--url", default="https://chatgpt.com/")
+    parser.add_argument("--url", default="https://duck.ai/")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--timeout-ms", type=int, default=60000)
     parser.add_argument("--wait-seconds", type=int, default=60)
     parser.add_argument("--post-response-wait-seconds", type=int, default=10)
     parser.add_argument("--response-settle-seconds", type=int, default=8)
     parser.add_argument("--max-settle-wait-seconds", type=int, default=180)
-    parser.add_argument("--user-data-dir", default=".playwright-chatgpt-profile")
+    parser.add_argument("--user-data-dir", default=".playwright-duckai-profile")
     parser.add_argument("--omit-sections", default="")
     parser.add_argument("--start-new-chat", action="store_true")
     parser.add_argument("--refresh-before-send", action="store_true")
     parser.add_argument("--allow-retry", action="store_true")
     parser.add_argument("--refresh-before-retry", action="store_true")
     parser.add_argument("--network-log", action="store_true")
-    parser.add_argument("--network-log-file", default="chatgpt_network.log")
-    parser.add_argument("--error-screenshot", default="chatgpt_playwright_error.png")
+    parser.add_argument("--network-log-file", default="duckai_network.log")
+    parser.add_argument("--error-screenshot", default="duckai_playwright_error.png")
     parser.add_argument("--success-screenshot", help="Save a full-page screenshot after a valid response")
-    parser.add_argument("--image-file", action="append", help="Optional local image to attach to this one ChatGPT message; may be repeated")
+    parser.add_argument("--image-file", action="append", help="Optional local image to attach to this one Duck.ai message; may be repeated")
     parser.add_argument("--chunks", type=int, default=1)
     parser.add_argument("--chunk-mode", choices=["none", "map_reduce", "finalize_on_last_chunk", "legacy"], default="none")
     return parser.parse_args()

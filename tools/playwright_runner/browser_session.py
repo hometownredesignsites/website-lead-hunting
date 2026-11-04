@@ -63,6 +63,9 @@ def dismiss_blocking_modals(page) -> None:
 
 def find_chat_composer(page, timeout_ms: int):
     selectors = [
+        "textarea[placeholder*='Ask anything privately']",
+        "[aria-label*='Ask anything privately']",
+        "[role='textbox'][contenteditable='true']",
         "#prompt-textarea",
         "[data-testid='prompt-textarea']",
         "textarea[data-testid='prompt-textarea']",
@@ -95,10 +98,14 @@ def find_chat_composer(page, timeout_ms: int):
 
 def assistant_turns(page):
     selectors = [
+        "[data-testid*='assistant-message']",
+        "[data-testid*='message'][data-role='assistant']",
+        "[data-message-author-role='assistant']",
+        "[data-role='assistant']",
         "[data-testid^='conversation-turn-'][data-turn='assistant'] [data-message-author-role='assistant']",
         "[data-testid^='conversation-turn-'][data-turn='assistant']",
         "[data-message-author-role='assistant']",
-        # ChatGPT's anonymous mobile shell uses this attribute on message list items.
+        # Duck.ai's anonymous mobile shell uses this attribute on message list items.
         "[data-message-role='assistant']",
     ]
     for selector in selectors:
@@ -108,21 +115,30 @@ def assistant_turns(page):
                 return locator
         except Exception:
             continue
-    return page.locator("[data-message-author-role='assistant']")
+    main = page.locator("main")
+    try:
+        if main.count() > 0:
+            return main
+    except Exception:
+        pass
+    return page.locator("body")
 
 
-def extract_response_text(assistant_messages, before_count: int, before_last_text: str) -> str:
+def extract_response_text(assistant_messages, before_count: int, before_last_text: str,
+                          current_prompt: str = "") -> str:
     def _normalize(text: str) -> str:
         cleaned = (text or "").strip()
-        cleaned = re.sub(r"^\s*chatgpt\s+said:\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^\s*chatgpt\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*duck(?:\.ai|ai)\s+said:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*duck(?:\.ai|ai)\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+        if current_prompt and current_prompt in cleaned:
+            cleaned = cleaned.rsplit(current_prompt, 1)[-1].strip()
         return cleaned.strip()
 
     after_count = assistant_messages.count()
     if after_count == 0:
         return ""
 
-    # The ChatGPT anonymous shell may append empty assistant list items after a
+    # The Duck.ai shell may append empty assistant list items after a
     # completed response (for example, for stopped/continuation UI state). Walk
     # newest to oldest and return the latest actual message text instead of
     # treating the final empty list item as an empty response.
@@ -178,7 +194,7 @@ def set_composer_text(composer, text: str) -> None:
 
 
 def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -> list[dict]:
-    """Attach one or more local images through ChatGPT's visible composer file input."""
+    """Attach one or more local images through Duck.ai's visible composer file input."""
     image_paths = [path.expanduser().resolve() for path in image_paths]
     if not image_paths:
         return []
@@ -186,11 +202,14 @@ def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -
         if not image_path.is_file():
             raise FileNotFoundError(f"Image attachment does not exist: {image_path}")
         if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
-            raise ValueError("ChatGPT image attachments must be PNG, JPEG, or WebP files")
+            raise ValueError("Duck.ai image attachments must be PNG, JPEG, or WebP files")
 
     file_inputs = page.locator("input[type='file']")
+    attachment_control = None
     if file_inputs.count() == 0:
         plus_selectors = [
+            "button[aria-label*='Add images or PDFs']",
+            "button:has-text('Add images or PDFs')",
             "button[data-testid='composer-plus-btn']",
             "button[aria-label*='Attach']",
             "button[aria-label*='attach']",
@@ -203,52 +222,43 @@ def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -
             try:
                 if candidate.count() and candidate.is_visible() and candidate.is_enabled():
                     candidate.click(timeout=2000)
+                    attachment_control = selector
                     clicked = True
                     break
             except Exception:
                 continue
         if not clicked:
-            raise RuntimeError("Could not find a visible ChatGPT attachment control")
+            raise RuntimeError("Could not find a visible Duck.ai attachment control")
         deadline = time.time() + max(1, timeout_ms / 1000)
         while time.time() < deadline and file_inputs.count() == 0:
             page.wait_for_timeout(250)
 
     if file_inputs.count() == 0:
-        raise RuntimeError("ChatGPT did not expose a file input after opening the attachment menu")
+        raise RuntimeError("Duck.ai did not expose a file input after opening the attachment menu")
     input_count = file_inputs.count()
+    before_images = page.locator("img[src^='blob:'], img[src^='data:image']").count()
     selected = file_inputs.nth(input_count - 1)
     selected.set_input_files([str(image_path) for image_path in image_paths], timeout=timeout_ms)
     deadline = time.time() + max(1, timeout_ms / 1000)
-    uploaded: list[dict] = []
+    confirmed = False
     while time.time() < deadline:
         try:
-            attachment_inputs = page.locator("input[name='imageAttachments']")
-            pending_inputs = page.locator("input[name='pendingImageUploads']")
-            if attachment_inputs.count():
-                raw_attachments = attachment_inputs.first.evaluate("el => el.value")
-                attachments = json.loads(raw_attachments or "[]")
-                pending = (json.loads(pending_inputs.first.evaluate("el => el.value") or "[]")
-                           if pending_inputs.count() else [])
-                if len(attachments) >= len(image_paths):
-                    uploaded = attachments[-len(image_paths):]
-                else:
-                    uploaded = []
-                if (len(uploaded) == len(image_paths)
-                        and all(isinstance(item, dict) and item.get("fileId") for item in uploaded)
-                        and not pending):
-                    break
+            current_images = page.locator("img[src^='blob:'], img[src^='data:image']").count()
+            body_text = page.locator("body").inner_text(timeout=1000)
+            names_visible = all(path.name in body_text for path in image_paths)
+            if current_images >= before_images + len(image_paths) or names_visible:
+                confirmed = True
+                break
         except Exception:
-            uploaded = None
+            pass
         page.wait_for_timeout(250)
-    if not uploaded or len(uploaded) != len(image_paths):
-        raise RuntimeError("ChatGPT did not confirm all uploaded images in its composer")
+    if not confirmed:
+        raise RuntimeError("Duck.ai did not visibly confirm the selected image attachments")
     page.wait_for_timeout(500)
     return [{"status": "uploaded", "filename": image_path.name,
-             "uploaded_filename": item.get("name"),
-             "bytes": image_path.stat().st_size, "file_id": item.get("fileId"),
-             "width": item.get("width"), "height": item.get("height"),
-             "file_input_count": input_count}
-            for image_path, item in zip(image_paths, uploaded)]
+             "bytes": image_path.stat().st_size, "file_input_count": input_count,
+             "attachment_control": attachment_control}
+            for image_path in image_paths]
 
 
 def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
@@ -264,6 +274,8 @@ def send_prompt(page, composer, prompt_text: str) -> None:
         composer.click(force=True, timeout=3000)
     set_composer_text(composer, prompt_text)
     send_selectors = [
+        "button[aria-label*='Send message']",
+        "button[aria-label='Send']",
         "button[data-testid='send-button']",
         "button[aria-label*='Send']:not([data-testid='composer-plus-btn'])",
         "button[aria-label*='send']:not([data-testid='composer-plus-btn'])",
@@ -290,10 +302,11 @@ def wait_for_valid_response(
     before_count: int,
     before_last_text: str,
     wait_seconds: int,
+    current_prompt: str = "",
 ) -> str:
     deadline = time.time() + max(1, wait_seconds)
     while time.time() < deadline:
-        text = extract_response_text(assistant_messages, before_count, before_last_text)
+        text = extract_response_text(assistant_messages, before_count, before_last_text, current_prompt)
         lowered = text.lower()
         if text and "something went wrong" not in lowered and not looks_like_non_answer_text(text):
             return text
@@ -307,6 +320,7 @@ def stabilize_response(
     post_response_wait_seconds: int,
     response_settle_seconds: int,
     max_settle_wait_seconds: int,
+    current_prompt: str = "",
 ) -> str:
     if post_response_wait_seconds > 0:
         page.wait_for_timeout(post_response_wait_seconds * 1000)
@@ -317,12 +331,14 @@ def stabilize_response(
         stop_visible = False
         try:
             stop_visible = page.locator(
-                "button[data-testid='stop-button'], button:has-text('Stop generating')"
+                "button[data-testid='stop-button'], button:has-text('Stop generating'), button[aria-label*='Stop generating']"
             ).first.is_visible()
         except Exception:
             pass
         try:
-            current = assistant_messages.last.inner_text().strip()
+            current = extract_response_text(
+                assistant_messages, 0, "", current_prompt=current_prompt
+            ).strip()
         except Exception:
             current = ""
         if current and current == previous and not stop_visible:

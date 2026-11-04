@@ -186,7 +186,7 @@ def create_campaign(workspace: Path, campaign_key: str, region: str, categories_
         "categories_sha256": hashlib.sha256(categories_csv.read_bytes()).hexdigest(),
         "cities_sha256": hashlib.sha256(cities_csv.read_bytes()).hexdigest(),
         "source_city_commit": os.environ.get("GITHUB_SHA", ""),
-        "source_branch": os.environ.get("GITHUB_REF_NAME", "git-chatgpt"),
+        "source_branch": os.environ.get("GITHUB_REF_NAME", "git-duckai"),
         "next_category_index": 1,
         "completed_categories": [],
         "processed_callback_run_ids": [],
@@ -214,7 +214,7 @@ def dispatch_review(state: dict) -> None:
 
 
 def retry_queue_pending(run_dir: Path) -> bool:
-    path = run_dir / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
+    path = run_dir / "DUCKAI_VISUAL_REVIEW_RETRY_QUEUE.json"
     if not path.is_file():
         return False
     queue = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -233,14 +233,14 @@ def review_counts(run_dir: Path) -> dict:
         row = json.loads(line)
         if row.get("site_check_status") != "loaded" or not is_visual_review_eligible(row):
             continue
-        last = row.get("chatgpt_visual_review_last_attempt") or {}
+        last = row.get("duckai_visual_review_last_attempt") or {}
         status = last.get("status")
         if status == "passed":
             counts["passed"] += 1
         elif status == "failed":
             counts["failed"] += 1
         elif status == "retry-needed":
-            queue_path = run_dir / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
+            queue_path = run_dir / "DUCKAI_VISUAL_REVIEW_RETRY_QUEUE.json"
             entry_map = {}
             if queue_path.is_file():
                 queue = json.loads(queue_path.read_text(encoding="utf-8-sig"))
@@ -392,7 +392,7 @@ def main() -> int:
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN", ""))
-    parser.add_argument("--ref", default=os.environ.get("GITHUB_REF_NAME", "git-chatgpt"))
+    parser.add_argument("--ref", default=os.environ.get("GITHUB_REF_NAME", "git-duckai"))
     args = parser.parse_args()
     workspace = args.workspace.resolve()
     dispatch_keys: list[str] = []

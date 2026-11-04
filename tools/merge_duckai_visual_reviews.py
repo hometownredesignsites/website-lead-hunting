@@ -125,14 +125,14 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         if successful:
             attempt.update(review)
             attempt["status"] = "passed"
-            row["chatgpt_visual_review"] = attempt
-        row["chatgpt_visual_review_last_attempt"] = attempt
+            row["duckai_visual_review"] = attempt
+        row["duckai_visual_review_last_attempt"] = attempt
 
     ledger_path.write_text(
         "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows),
         encoding="utf-8",
     )
-    queue_path = ledger_path.parent / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
+    queue_path = ledger_path.parent / "DUCKAI_VISUAL_REVIEW_RETRY_QUEUE.json"
     if queue_path.is_file():
         try:
             retry_queue = json.loads(queue_path.read_text(encoding="utf-8-sig"))
@@ -148,7 +148,7 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
     now = now_dt.isoformat(timespec="seconds")
     for candidate_id in candidate_ids:
         row = by_id[candidate_id]
-        last_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
+        last_attempt = row.get("duckai_visual_review_last_attempt") or {}
         status = last_attempt.get("status")
         entry = entries.get(candidate_id, {"candidate_id": candidate_id})
         entry.update({
@@ -197,7 +197,7 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
     statuses: dict[str, int] = {}
     candidate_ids_by_status: dict[str, list[str]] = {"passed": [], "retry-needed": [], "failed": []}
     for candidate_id in candidate_ids:
-        durable_attempt = by_id[candidate_id].get("chatgpt_visual_review_last_attempt") or {}
+        durable_attempt = by_id[candidate_id].get("duckai_visual_review_last_attempt") or {}
         status = durable_attempt.get("status", "retry-needed")
         if status not in {"passed", "failed", "retry-needed"}:
             status = "failed"
@@ -244,7 +244,7 @@ def main() -> int:
                     args.retry_delay_minutes, args.max_automatic_retry_rounds,
                     args.city_campaign_key)
     summary["automatic_retry_round"] = args.automatic_retry_round
-    summary["retry_queue_file"] = str(args.ledger.parent / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json")
+    summary["retry_queue_file"] = str(args.ledger.parent / "DUCKAI_VISUAL_REVIEW_RETRY_QUEUE.json")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2))

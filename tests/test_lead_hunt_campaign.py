@@ -20,9 +20,9 @@ from tools.lead_hunt_campaign import (
 def event_for(batch: int = 1, attempt: int = 1, run_id: int = 11,
               conclusion: str = "success") -> dict:
     return {"workflow_run": {
-        "name": f"ChatGPT website lead hunt campaign-x campaign=campaign-x batch={batch} attempt={attempt}",
+        "name": f"Duck.ai website lead hunt campaign-x campaign=campaign-x batch={batch} attempt={attempt}",
         "event": "workflow_dispatch",
-        "display_title": f"ChatGPT website lead hunt campaign-x campaign=campaign-x batch={batch} attempt={attempt}",
+        "display_title": f"Duck.ai website lead hunt campaign-x campaign=campaign-x batch={batch} attempt={attempt}",
         "id": run_id,
         "conclusion": conclusion,
     }}
@@ -61,14 +61,14 @@ class LeadHuntCampaignTests(unittest.TestCase):
         title = event["workflow_run"].pop("display_title")
         self.assertEqual(event_campaign(event, {"display_title": title}), ("campaign-x", 1, 1))
         ordinary = event_for()
-        ordinary["workflow_run"]["display_title"] = "ChatGPT website lead hunt campaign-x"
+        ordinary["workflow_run"]["display_title"] = "Duck.ai website lead hunt campaign-x"
         self.assertIsNone(event_campaign(ordinary))
 
     def test_workflow_run_api_record_supplies_campaign_display_title(self) -> None:
         from io import BytesIO
-        response = BytesIO(json.dumps({"name": "ChatGPT website lead hunt campaign-x campaign=campaign-x batch=1 attempt=1",
-            "event": "workflow_dispatch", "path": ".github/workflows/lead-hunt.yml@refs/heads/git-chatgpt", "display_title":
-            "ChatGPT website lead hunt campaign-x campaign=campaign-x batch=1 attempt=1"}).encode())
+        response = BytesIO(json.dumps({"name": "Duck.ai website lead hunt campaign-x campaign=campaign-x batch=1 attempt=1",
+            "event": "workflow_dispatch", "path": ".github/workflows/lead-hunt.yml@refs/heads/git-duckai", "display_title":
+            "Duck.ai website lead hunt campaign-x campaign=campaign-x batch=1 attempt=1"}).encode())
         response.status = 200
         with patch("tools.lead_hunt_campaign.urllib.request.urlopen") as open_url:
             open_url.return_value.__enter__.return_value = response
@@ -116,8 +116,8 @@ class LeadHuntCampaignTests(unittest.TestCase):
         self.assertEqual(self.state["status"], "paused")
 
     def test_dispatch_uses_checkpoint_and_bounded_inputs(self) -> None:
-        payload = dispatch_payload(self.state, "git-chatgpt")
-        self.assertEqual(payload["ref"], "git-chatgpt")
+        payload = dispatch_payload(self.state, "git-duckai")
+        self.assertEqual(payload["ref"], "git-duckai")
         self.assertEqual(payload["inputs"]["run_key"], "campaign-x")
         self.assertEqual(payload["inputs"]["max_queries"], "2")
         self.assertEqual(payload["inputs"]["campaign_batch"], "1")

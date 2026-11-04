@@ -1,4 +1,4 @@
-name: ChatGPT visual review batch
+name: Duck.ai visual review batch
 
 on:
   workflow_dispatch:
@@ -63,7 +63,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: hometownredesignsites/website-lead-hunting-operations
-          ref: main
+          ref: git-duckai
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results
@@ -172,8 +172,8 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -r requirements.txt
           python -m playwright install chromium
-          mkdir -p artifacts/chatgpt-visual-review tmp
-          rm -rf tmp/chatgpt-visual-review-profile
+          mkdir -p artifacts/duckai-visual-review tmp
+          rm -rf tmp/duckai-visual-review-profile
 
       - name: Download lead-hunt artifact for this candidate
         id: source_artifact
@@ -198,10 +198,10 @@ jobs:
             echo "Lead-hunt artifact is unavailable or expired; checked-out repository screenshots are not used as a fallback." >&2
             exit 1
           fi
-          python tools/prepare_chatgpt_visual_review.py \
+          python tools/prepare_duckai_visual_review.py \
             --run-dir "$ARTIFACT_RUN_DIR" \
             --candidate-id "$REVIEW_CANDIDATE_ID" \
-            --output-dir "artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/website-review"
+            --output-dir "artifacts/duckai-visual-review/$REVIEW_CANDIDATE_ID/website-review"
 
       - name: Assess screenshots with the proven in-session retry behavior
         id: review
@@ -211,25 +211,25 @@ jobs:
         env:
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
         run: |
-          REVIEW_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID"
+          REVIEW_DIR="artifacts/duckai-visual-review/$REVIEW_CANDIDATE_ID"
           ATTEMPT_ROOT="$REVIEW_DIR/attempts"
           mkdir -p "$ATTEMPT_ROOT"
           ATTEMPT_DIR="$ATTEMPT_ROOT/1"
           mkdir -p "$ATTEMPT_DIR"
           review_rc=0
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python tools/chatgpt_file_playwright_anonymous_ci.py \
-              --stage-name chatgpt_visual_review \
+            python tools/duckai_file_playwright_anonymous_ci.py \
+              --stage-name duckai_visual_review \
               --input-file "$REVIEW_DIR/website-review/prompt.txt" \
               --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
               --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
               --output-file "$ATTEMPT_DIR/response.md" \
               --metadata-output-file "$ATTEMPT_DIR/metadata.json" \
-              --success-screenshot "$ATTEMPT_DIR/chatgpt-response.png" \
-              --error-screenshot "$ATTEMPT_DIR/chatgpt-error.png" \
+              --success-screenshot "$ATTEMPT_DIR/duckai-response.png" \
+              --error-screenshot "$ATTEMPT_DIR/duckai-error.png" \
               --network-log \
-              --network-log-file "$ATTEMPT_DIR/chatgpt-network.log" \
-              --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID" \
+              --network-log-file "$ATTEMPT_DIR/duckai-network.log" \
+              --user-data-dir "tmp/duckai-visual-review-profile-$REVIEW_CANDIDATE_ID" \
               --allow-retry \
               --refresh-before-retry \
               --wait-seconds 70 \
@@ -245,7 +245,7 @@ jobs:
               > "$ATTEMPT_DIR/runner.log" 2>&1 || review_rc=$?
 
           if [[ "$review_rc" -eq 0 ]]; then
-            python tools/validate_chatgpt_visual_review.py \
+            python tools/validate_duckai_visual_review.py \
               --response "$ATTEMPT_DIR/response.md" \
               --metadata "$ATTEMPT_DIR/metadata.json" \
               --context "$REVIEW_DIR/website-review/candidate-context.json" \
@@ -320,7 +320,7 @@ jobs:
           from datetime import datetime, timezone
           from pathlib import Path
           candidate_id = os.environ["REVIEW_CANDIDATE_ID"]
-          review_dir = Path("artifacts/chatgpt-visual-review") / candidate_id
+          review_dir = Path("artifacts/duckai-visual-review") / candidate_id
           result_path = review_dir / "website-review" / "review-result.json"
           result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
           source_available = os.environ.get("SOURCE_ARTIFACT_OUTCOME") == "success"
@@ -365,7 +365,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: visual-review-${{ github.run_id }}-${{ matrix.candidate_id }}
-          path: artifacts/chatgpt-visual-review/${{ matrix.candidate_id }}/
+          path: artifacts/duckai-visual-review/${{ matrix.candidate_id }}/
           if-no-files-found: error
           retention-days: 7
 
@@ -393,7 +393,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: hometownredesignsites/website-lead-hunting-operations
-          ref: main
+          ref: git-duckai
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results
@@ -421,7 +421,7 @@ jobs:
           RETRY_REQUEST_ID: ${{ needs.plan.outputs.retry_request_id }}
           CITY_CAMPAIGN_KEY: ${{ needs.plan.outputs.city_campaign_key }}
         run: |
-          python tools/merge_chatgpt_visual_reviews.py \
+          python tools/merge_duckai_visual_reviews.py \
             --ledger "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" \
             --results-dir artifacts/visual-review-results \
             --candidate-ids "$CANDIDATE_IDS" \
@@ -430,7 +430,7 @@ jobs:
             --automatic-retry-round "$AUTOMATIC_RETRY_ROUND" \
             --retry-request-id "$RETRY_REQUEST_ID" \
             --city-campaign-key "$CITY_CAMPAIGN_KEY" \
-            --output "runs/$RUN_KEY/CHATGPT_VISUAL_REVIEW_BATCH.json"
+            --output "runs/$RUN_KEY/DUCKAI_VISUAL_REVIEW_BATCH.json"
 
       - name: Refresh validated run summary
         if: always()
@@ -455,7 +455,7 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          summary_path = Path("runs") / os.environ["RUN_KEY"] / "CHATGPT_VISUAL_REVIEW_BATCH.json"
+          summary_path = Path("runs") / os.environ["RUN_KEY"] / "DUCKAI_VISUAL_REVIEW_BATCH.json"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as report:
               report.write("\n## Visual review results\n\n")
               if not summary_path.is_file():
@@ -483,7 +483,7 @@ jobs:
           PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
           python tools/private_results.py commit-run --private-repo private-results \
-            --run-key "$RUN_KEY" --message "Save ChatGPT visual reviews: $RUN_KEY"
+            --run-key "$RUN_KEY" --message "Save Duck.ai visual reviews: $RUN_KEY"
 
       - name: Report candidate job interruptions
         if: always() && needs.review_site.result != 'success'

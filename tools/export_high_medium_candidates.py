@@ -42,7 +42,7 @@ def export(run_dir: Path, output: Path | None = None) -> dict[str, int]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig")) if manifest_path.is_file() else {}
     selected = []
     for row in read_jsonl(ledger):
-        visual = row.get("chatgpt_visual_review") or {}
+        visual = row.get("duckai_visual_review") or {}
         # Keep the last successful score as the durable assessment when a newer
         # attempt needs retry; attempt status is exported separately.
         automated = str(row.get("automated_priority") or "").lower()
@@ -60,7 +60,7 @@ def export(run_dir: Path, output: Path | None = None) -> dict[str, int]:
             if isinstance(check, dict) and check.get("status") in {"issues_found", "partial", "weak_date_clue_only"}:
                 check_issues.append(f"{check_name}: {check['status']}")
         evidence_summary = "; ".join(filter(None, [signal_text, "; ".join(check_issues)]))
-        latest_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
+        latest_attempt = row.get("duckai_visual_review_last_attempt") or {}
         query = queries.get(str(row.get("source_query_index")), {})
         categories = manifest.get("categories") or []
         selected.append({

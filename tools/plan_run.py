@@ -48,7 +48,7 @@ def main() -> int:
         "jobs_at_that_batch_size": jobs,
         "category_csv": str(args.categories_csv),
         "city_csv": str(args.cities_csv),
-        "note": "Planning totals are upper bounds; ChatGPT may return fewer valid unique sites.",
+        "note": "Planning totals are upper bounds; Duck.ai may return fewer valid unique sites.",
     }, indent=2))
     return 0
 
