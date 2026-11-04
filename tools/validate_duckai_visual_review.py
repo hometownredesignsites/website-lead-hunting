@@ -163,10 +163,6 @@ def main() -> int:
     if not review:
         errors.append("response has no parseable JSON object or labeled assessment scorecard")
     else:
-        if not review.get("issue_clusters_reported", all(
-            key in review for key in ("moderate_issue_clusters", "severe_issue_clusters")
-        )):
-            errors.append("response must explicitly report both moderate and severe issue clusters")
         if review.get("candidate_id") != context.get("candidate_id"):
             errors.append("candidate_id does not match the source candidate")
         if review.get("website_url") != context.get("website_url"):
@@ -183,8 +179,20 @@ def main() -> int:
             errors.append("model-reported visual score must be an integer from 0 to 100")
             calibrated_score, calibrated_verdict = None, model_verdict
         else:
-            moderate_count = cluster_count(review, "moderate_issue_clusters")
-            severe_count = cluster_count(review, "severe_issue_clusters")
+            explicit_clusters = review.get("issue_clusters_reported", all(
+                key in review for key in ("moderate_issue_clusters", "severe_issue_clusters")
+            ))
+            if explicit_clusters:
+                moderate_count = cluster_count(review, "moderate_issue_clusters")
+                severe_count = cluster_count(review, "severe_issue_clusters")
+                issue_count_source = "explicit_issue_clusters"
+            else:
+                # Some guest-chat responses omit the severity headings. Preserve
+                # their stated major issues as moderate opportunities rather than
+                # discarding the scorecard or silently treating them as severe.
+                moderate_count = cluster_count(review, "major_issues")
+                severe_count = 0
+                issue_count_source = "major_issues_moderate_fallback"
             calibrated_score = min(100, 30 + 10 * moderate_count + 20 * severe_count)
             calibrated_verdict = (
                 "pass" if calibrated_score < 50 else
@@ -196,6 +204,7 @@ def main() -> int:
             review["visual_verdict"] = calibrated_verdict
             review["score_calibration"] = {
                 "method": "30 + 10 per moderate cluster + 20 per severe cluster, capped at 100",
+                "issue_count_source": issue_count_source,
                 "moderate_cluster_count": moderate_count,
                 "severe_cluster_count": severe_count,
             }
