@@ -28,7 +28,6 @@ jobs:
     steps:
       - name: Check out public workflow code
         uses: actions/checkout@v5
-
       - name: Check out private calibration inputs and ChatGPT results branch
         uses: actions/checkout@v5
         with:
@@ -37,7 +36,6 @@ jobs:
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results-chatgpt
-
       - name: Check out private Duck.ai results branch
         uses: actions/checkout@v5
         with:
@@ -46,8 +44,8 @@ jobs:
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results-duckai
-
-      - name: Validate run key and capture same screenshots for both providers
+      - name: Capture matched screenshots and save private run ledgers
+        shell: bash
         env:
           CALIBRATION_RUN_KEY: ${{ inputs.calibration_run_key }}
         run: |
@@ -63,8 +61,7 @@ jobs:
             --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
           python tools/private_results.py commit-run --private-repo private-results-duckai \
             --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
-
-      - name: Upload temporary screenshots for matching ChatGPT and Duck.ai reviews
+      - name: Upload temporary screenshots for both provider reviews
         uses: actions/upload-artifact@v6
         with:
           name: lead-hunt-${{ inputs.calibration_run_key }}-${{ github.run_id }}
