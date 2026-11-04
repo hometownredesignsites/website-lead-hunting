@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -52,9 +53,12 @@ def review_sort_key(review: dict) -> tuple[str, int]:
 def assessment_fields(candidate: dict | None, provider: str) -> dict:
     prefix = f"{provider}_"
     if not candidate:
-        return {prefix + key: "" for key in (
-            "status", "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id"
-        )}
+        return {
+            prefix + "status": "not_assessed",
+            **{prefix + key: "" for key in (
+                "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
+            )},
+        }
 
     reviews = [review for review in review_candidates(candidate, provider)]
     valid = [review for review in reviews if review.get("status") == "passed"
@@ -68,7 +72,77 @@ def assessment_fields(candidate: dict | None, provider: str) -> dict:
         prefix + "model_verdict": chosen.get("model_reported_visual_verdict", ""),
         prefix + "confidence": chosen.get("confidence", ""),
         prefix + "workflow_run_id": chosen.get("review_workflow_run_id", ""),
+        prefix + "factor_assessments": json.dumps(chosen.get("factor_assessments"), ensure_ascii=False, sort_keys=True)
+        if chosen.get("factor_assessments") else "",
     }
+
+
+def canonical_label(value: str) -> str:
+    normalized = (value or "").strip().casefold()
+    return {"high": "High", "medium": "Medium", "pass": "Pass"}.get(normalized, "Unknown")
+
+
+def assign_stratified_split(rows: list[dict]) -> None:
+    """Create a stable 20% holdout within each human-decision class."""
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(canonical_label(row.get("decision", "")), []).append(row)
+    for group in groups.values():
+        ordered = sorted(group, key=lambda row: hashlib.sha256(
+            (site_key(row.get("website", "")) or row.get("business", "")).encode("utf-8")
+        ).hexdigest())
+        for index, row in enumerate(ordered):
+            row["benchmark_split"] = "holdout" if index % 5 == 0 else "tuning"
+
+
+def summarize(rows: list[dict], split: str | None = None) -> dict:
+    selected = [row for row in rows if split is None or row.get("benchmark_split") == split]
+    report = {"rows": len(selected), "human_decisions": {}, "providers": {}}
+    for row in selected:
+        label = canonical_label(row.get("decision", ""))
+        report["human_decisions"][label] = report["human_decisions"].get(label, 0) + 1
+    for provider in PROVIDERS:
+        matrix: dict[str, dict[str, int]] = {}
+        status_counts: dict[str, int] = {}
+        actual_counts: dict[str, int] = {}
+        predicted_counts: dict[str, int] = {}
+        for row in selected:
+            status = row.get(f"{provider}_status", "not_assessed") or "not_assessed"
+            status_counts[status] = status_counts.get(status, 0) + 1
+            label = canonical_label(row.get("decision", ""))
+            verdict = canonical_label(row.get(f"{provider}_verdict", ""))
+            if status == "passed" and verdict in {"High", "Medium", "Pass"}:
+                row_counts = matrix.setdefault(label, {})
+                row_counts[verdict] = row_counts.get(verdict, 0) + 1
+                actual_counts[label] = actual_counts.get(label, 0) + 1
+                predicted_counts[verdict] = predicted_counts.get(verdict, 0) + 1
+        label_metrics = {}
+        for label in ("High", "Medium", "Pass"):
+            true_positive = matrix.get(label, {}).get(label, 0)
+            label_metrics[label] = {
+                "true_positive": true_positive,
+                "false_negative": actual_counts.get(label, 0) - true_positive,
+                "false_positive": predicted_counts.get(label, 0) - true_positive,
+                "precision": true_positive / predicted_counts[label] if predicted_counts.get(label) else None,
+                "recall": true_positive / actual_counts[label] if actual_counts.get(label) else None,
+                "evaluated_human_examples": actual_counts.get(label, 0),
+            }
+        report["providers"][provider] = {
+            "status_counts": status_counts,
+            "human_to_model_verdict_counts": matrix,
+            "label_metrics": label_metrics,
+        }
+    paired = [abs(float(row["chatgpt_score"]) - float(row["duckai_score"])) <= 10
+              for row in selected
+              if row.get("chatgpt_status") == "passed" and row.get("duckai_status") == "passed"
+              and isinstance(row.get("chatgpt_score"), (int, float))
+              and isinstance(row.get("duckai_score"), (int, float))]
+    report["provider_score_agreement"] = {
+        "paired_scored_sites": len(paired),
+        "within_10_points": sum(paired),
+        "within_10_rate": sum(paired) / len(paired) if paired else None,
+    }
+    return report
 
 
 def main() -> int:
@@ -122,10 +196,12 @@ def main() -> int:
                 output.update(assessment_fields(None, provider))
         rows.append(output)
 
-    fields = [*LABEL_FIELDS, "match_status", "candidate_ids"]
+    assign_stratified_split(rows)
+
+    fields = [*LABEL_FIELDS, "match_status", "benchmark_split", "candidate_ids"]
     for provider in PROVIDERS:
         fields.extend(f"{provider}_{field}" for field in (
-            "status", "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id"
+            "status", "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
         ))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -133,12 +209,24 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(rows)
 
+    summary_path = args.output.with_suffix(".summary.json")
+    summary = {
+        "output": str(args.output),
+        "holdout_method": "stable host-hash order; one of every five rows per human-decision class",
+        "overall": summarize(rows),
+        "tuning": summarize(rows, "tuning"),
+        "holdout": summarize(rows, "holdout"),
+        "warning": "Do not tune using holdout rows. Missing assessments are coverage gaps, not negative outcomes.",
+    }
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+
     counts = {}
     for row in rows:
         label = row.get("decision", "unknown").strip().casefold() or "unknown"
         counts[label] = counts.get(label, 0) + 1
     summary = {
         "output": str(args.output),
+        "summary": str(summary_path),
         "human_rows": len(rows),
         "human_decisions": counts,
         "matched_hosts": sum(row["match_status"] == "matched" for row in rows),

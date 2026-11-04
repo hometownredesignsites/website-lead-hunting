@@ -122,6 +122,8 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         }
         if isinstance(envelope.get("attempts"), list):
             attempt["attempts"] = envelope["attempts"]
+        if isinstance(result, dict) and isinstance(result.get("review"), dict):
+            attempt["review_evidence"] = result["review"]
         if successful:
             attempt.update(review)
             attempt["status"] = "passed"

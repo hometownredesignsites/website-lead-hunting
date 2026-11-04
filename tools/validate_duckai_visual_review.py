@@ -11,6 +11,10 @@ try:
     from playwright_runner.prompt_contracts import extract_json_payload
 except ModuleNotFoundError:
     from tools.playwright_runner.prompt_contracts import extract_json_payload
+try:
+    from visual_factor_scoring import enforce_script_audit_evidence, normalize_and_score, parse_factor_assessments
+except ModuleNotFoundError:
+    from tools.visual_factor_scoring import enforce_script_audit_evidence, normalize_and_score, parse_factor_assessments
 
 
 SECTION_KEYS = {
@@ -94,6 +98,7 @@ def parse_labeled_text(response_text: str, context: dict) -> dict | None:
         "issue_clusters_reported": issue_cluster_sections_seen == {
             "moderate_issue_clusters", "severe_issue_clusters"
         },
+        "factor_assessments": parse_factor_assessments(response_text, {}),
         **observations,
     }
 
@@ -171,43 +176,32 @@ def main() -> int:
         model_score = review.get("visual_opportunity_score")
         if model_verdict not in {"high", "medium", "pass", "uncertain"}:
             errors.append("visual_verdict is not an allowed value")
-        if model_verdict == "uncertain":
-            if model_score is not None:
-                errors.append("uncertain verdict must use a null score")
-            calibrated_score, calibrated_verdict = None, "uncertain"
-        elif not isinstance(model_score, int) or isinstance(model_score, bool) or not 0 <= model_score <= 100:
-            errors.append("model-reported visual score must be an integer from 0 to 100")
-            calibrated_score, calibrated_verdict = None, model_verdict
-        else:
-            explicit_clusters = review.get("issue_clusters_reported", all(
-                key in review for key in ("moderate_issue_clusters", "severe_issue_clusters")
-            ))
-            if explicit_clusters:
-                moderate_count = cluster_count(review, "moderate_issue_clusters")
-                severe_count = cluster_count(review, "severe_issue_clusters")
-                issue_count_source = "explicit_issue_clusters"
-            else:
-                # Some guest-chat responses omit the severity headings. Preserve
-                # their stated major issues as moderate opportunities rather than
-                # discarding the scorecard or silently treating them as severe.
-                moderate_count = cluster_count(review, "major_issues")
-                severe_count = 0
-                issue_count_source = "major_issues_moderate_fallback"
-            calibrated_score = min(100, 30 + 10 * moderate_count + 20 * severe_count)
-            calibrated_verdict = (
-                "pass" if calibrated_score < 50 else
-                "medium" if calibrated_score < 75 else "high"
-            )
-            review["model_reported_visual_opportunity_score"] = model_score
-            review["model_reported_visual_verdict"] = model_verdict
-            review["visual_opportunity_score"] = calibrated_score
-            review["visual_verdict"] = calibrated_verdict
-            review["score_calibration"] = {
-                "method": "30 + 10 per moderate cluster + 20 per severe cluster, capped at 100",
-                "issue_count_source": issue_count_source,
-                "moderate_cluster_count": moderate_count,
-                "severe_cluster_count": severe_count,
-            }
+        if model_verdict == "uncertain" and model_score is not None:
+            errors.append("uncertain model verdict must use a null score")
+        elif model_score is not None and (not isinstance(model_score, int) or isinstance(model_score, bool) or not 0 <= model_score <= 100):
+            errors.append("model-reported visual score must be an integer from 0 to 100 or null")
+        factors = parse_factor_assessments(response_text, review)
+        audit = context.get("script_audit") or {}
+        enforce_script_audit_evidence(factors, audit)
+        scorecard = normalize_and_score(factors)
+        if model_verdict == "uncertain" and not scorecard["errors"]:
+            scorecard["score"] = None
+            scorecard["verdict"] = "uncertain"
+            if not scorecard["uncertain_factors"]:
+                scorecard["uncertain_factors"] = ["model_assessment_uncertain"]
+        review["factor_assessments"] = scorecard["factors"]
+        errors.extend(scorecard["errors"])
+        review["model_reported_visual_opportunity_score"] = model_score
+        review["model_reported_visual_verdict"] = model_verdict
+        review["visual_opportunity_score"] = scorecard["score"]
+        review["visual_verdict"] = scorecard["verdict"]
+        review["score_calibration"] = {
+            "version": "fixed-factors-v1",
+            "method": "sum of five fixed factor severities: none=0, minor=5, moderate=25, severe=50; capped at 100",
+            "factor_points": {key: {"severity": value["severity"], "points": {"none": 0, "minor": 5, "moderate": 25, "severe": 50}.get(value["severity"])} for key, value in scorecard["factors"].items()},
+            "uncertain_factors": scorecard["uncertain_factors"],
+        }
+        review["raw_model_response"] = response_text
         verdict, score = calibrated_verdict, calibrated_score
         if verdict == "uncertain":
             if score is not None:
