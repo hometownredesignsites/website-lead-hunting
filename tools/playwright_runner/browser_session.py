@@ -237,17 +237,30 @@ def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -
         raise RuntimeError("Duck.ai did not expose a file input after opening the attachment menu")
     input_count = file_inputs.count()
     before_images = page.locator("img[src^='blob:'], img[src^='data:image']").count()
+    remove_image_buttons = page.locator("button[aria-label^='Remove image ']")
+    before_remove_buttons = remove_image_buttons.count()
     selected = file_inputs.nth(input_count - 1)
     selected.set_input_files([str(image_path) for image_path in image_paths], timeout=timeout_ms)
     deadline = time.time() + max(1, timeout_ms / 1000)
     confirmed = False
+    confirmation_method = None
     while time.time() < deadline:
         try:
             current_images = page.locator("img[src^='blob:'], img[src^='data:image']").count()
+            current_remove_buttons = remove_image_buttons.count()
             body_text = page.locator("body").inner_text(timeout=1000)
             names_visible = all(path.name in body_text for path in image_paths)
-            if current_images >= before_images + len(image_paths) or names_visible:
+            if current_images >= before_images + len(image_paths):
                 confirmed = True
+                confirmation_method = "image_preview"
+                break
+            if current_remove_buttons >= before_remove_buttons + len(image_paths):
+                confirmed = True
+                confirmation_method = "remove_image_controls"
+                break
+            if names_visible:
+                confirmed = True
+                confirmation_method = "visible_filenames"
                 break
         except Exception:
             pass
@@ -257,7 +270,8 @@ def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -
     page.wait_for_timeout(500)
     return [{"status": "uploaded", "filename": image_path.name,
              "bytes": image_path.stat().st_size, "file_input_count": input_count,
-             "attachment_control": attachment_control}
+             "attachment_control": attachment_control,
+             "confirmation_method": confirmation_method}
             for image_path in image_paths]
 
 
