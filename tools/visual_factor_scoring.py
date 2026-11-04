@@ -67,7 +67,23 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
             "source": "script_audit",
         }
     interactions_status = (audit.get("broken_links_and_interactions") or {}).get("status", "not_run")
-    if interactions_status not in {"clear", "issues_found"}:
+    interactions = audit.get("broken_links_and_interactions") or {}
+    interaction_audit = interactions.get("interactions") or {}
+    interaction_not_applicable = (
+        interaction_audit.get("status") == "not_applicable"
+        and interaction_audit.get("tested_count") == 0
+        and not interaction_audit.get("findings")
+    )
+    if interactions_status in {"clear", "issues_found"} and interaction_not_applicable:
+        # The audit explicitly found no safe menu/tab/disclosure control to test.
+        # That is not a failed interaction and should not make the whole scorecard uncertain.
+        factors["interactions"] = {
+            "severity": "none",
+            "evidence": "The audit found no safe menu, tab, or disclosure controls to test; no failed interaction was observed.",
+            "source": "script_audit",
+        }
+    elif (interactions_status not in {"clear", "issues_found"}
+          or interaction_audit.get("status") not in {"clear", "issues_found"}):
         factors["interactions"] = {
             "severity": "not_assessable",
             "evidence": f"Automated links/interactions audit status is {interactions_status}; findings are unavailable.",
