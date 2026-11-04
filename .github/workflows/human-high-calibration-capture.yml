@@ -28,6 +28,7 @@ jobs:
     steps:
       - name: Check out public workflow code
         uses: actions/checkout@v5
+
       - name: Check out private calibration inputs and ChatGPT results branch
         uses: actions/checkout@v5
         with:
@@ -36,6 +37,7 @@ jobs:
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results-chatgpt
+
       - name: Check out private Duck.ai results branch
         uses: actions/checkout@v5
         with:
@@ -44,10 +46,11 @@ jobs:
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results-duckai
-      - name: Capture matched screenshots and save private run ledgers
-        shell: bash
+
+      - name: Validate run key and capture same screenshots for both providers
         env:
           CALIBRATION_RUN_KEY: ${{ inputs.calibration_run_key }}
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
           if ! [[ "$CALIBRATION_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "calibration_run_key contains invalid characters" >&2
@@ -61,7 +64,8 @@ jobs:
             --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
           python tools/private_results.py commit-run --private-repo private-results-duckai \
             --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
-      - name: Upload temporary screenshots for both provider reviews
+
+      - name: Upload temporary screenshots for matching ChatGPT and Duck.ai reviews
         uses: actions/upload-artifact@v6
         with:
           name: lead-hunt-${{ inputs.calibration_run_key }}-${{ github.run_id }}
