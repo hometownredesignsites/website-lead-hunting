@@ -139,7 +139,7 @@ Do not infer missing or hidden content, poor usability, or a broken section from
 
 Use high (75-100) only when the evidence-cluster calculation reaches 75; examples are two severe clusters, four moderate clusters, or one severe plus two moderate clusters. Use uncertain with a null score when the combined evidence is insufficient. Score bands: high=75-100, medium=50-74, pass=0-49.
 
-Calibrate the number mechanically from independently evidenced issue clusters. First count moderate clusters (M) and severe clusters (S); do not count cosmetic refinements, repeat observations of the same root problem, speculative effects, or the same text-size complaint across several screenshots more than once. Use score = min(100, 24 + 13*M + 26*S). This makes no material issue 24, one moderate 37, two moderate 50, one severe 50, three moderate 63, and two severe 76. Verdict must follow the score bands above. To count a moderate cluster, name a visible user-facing consequence; to count severe, show an obvious obstruction or substantial loss of readability, navigation, trust, or ability to request service. A dark panel, compact appearance, or small-looking text on a reduced image does not qualify by itself. If legibility is uncertain at the supplied image resolution, call it out as a limitation and do not score it as a material issue.
+List each independently evidenced moderate or severe issue cluster in its own section below. Do not count cosmetic refinements, repeat observations of the same root problem, speculative effects, or the same text-size complaint across several screenshots more than once. A moderate cluster must name a visible user-facing consequence. A severe cluster must show an obvious obstruction or substantial loss of readability, navigation, trust, or ability to request service. A dark panel, compact appearance, or small-looking text does not qualify by itself. If legibility is uncertain at the supplied image resolution, call it out as a limitation and do not count it as a material issue. The Python validator will calculate the durable score as min(100, 30 + 10*M + 20*S), where M and S are the number of listed moderate and severe clusters. Thus no issues=30, one moderate=40, two moderate=50, one severe=50. Verdict is derived from this score; report your own score and verdict too so the raw model judgment is retained separately.
 
 Return a concise plain-text assessment, not JSON. Use this exact labeled format so the result can be converted reliably:
 Visual opportunity score: <integer 0-100>/100, or "uncertain (no score)" when the visual evidence is insufficient
@@ -159,6 +159,10 @@ Mobile observations:
 - <summary across both mobile views>
 Major issues:
 - <issue, or "None observed">
+Moderate issue clusters:
+- <one independently evidenced moderate user-impact issue per bullet, or "None observed">
+Severe issue clusters:
+- <one independently evidenced severe user-impact issue per bullet, or "None observed">
 Positive signals:
 - <signal, or "None observed">
 Recommended redesign focus:

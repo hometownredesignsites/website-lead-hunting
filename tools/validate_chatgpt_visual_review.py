@@ -18,6 +18,8 @@ SECTION_KEYS = {
     "desktop observations": "desktop_observations",
     "mobile observations": "mobile_observations",
     "major issues": "major_issues",
+    "moderate issue clusters": "moderate_issue_clusters",
+    "severe issue clusters": "severe_issue_clusters",
     "positive signals": "positive_signals",
     "recommended redesign focus": "recommended_redesign_focus",
     "limitations": "limitations",
@@ -50,6 +52,7 @@ def parse_labeled_text(response_text: str, context: dict) -> dict | None:
 
     observations = {key: [] for key in SECTION_KEYS.values()}
     current_section = None
+    issue_cluster_sections_seen: set[str] = set()
     scalar_line = re.compile(r"^\s*(?:Visual opportunity score|Verdict|Confidence)\s*:", re.IGNORECASE)
     bullet_prefix = re.compile(r"^\s*(?:[-*•]+|\d+[.)])\s*")
     for line in response_text.splitlines():
@@ -59,9 +62,11 @@ def parse_labeled_text(response_text: str, context: dict) -> dict | None:
         heading = re.match(r"^\s*([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$", line)
         if heading:
             current_section = SECTION_KEYS.get(heading.group(1).strip().lower())
+            if current_section in {"moderate_issue_clusters", "severe_issue_clusters"}:
+                issue_cluster_sections_seen.add(current_section)
             if current_section and heading.group(2).strip():
                 item = bullet_prefix.sub("", heading.group(2)).strip()
-                if item:
+                if item and item.lower() not in {"none observed", "none identified", "none noted", "none", "n/a"}:
                     observations[current_section].append(item)
             continue
         if current_section and line.strip():
@@ -75,8 +80,20 @@ def parse_labeled_text(response_text: str, context: dict) -> dict | None:
         "visual_opportunity_score": score,
         "visual_verdict": verdict,
         "confidence": confidence_match.group(1).lower(),
+        "issue_clusters_reported": issue_cluster_sections_seen == {
+            "moderate_issue_clusters", "severe_issue_clusters"
+        },
         **observations,
     }
+
+
+def cluster_count(review: dict, key: str) -> int:
+    items = review.get(key)
+    if not isinstance(items, list):
+        return 0
+    ignored = {"none observed", "none identified", "none noted", "none", "n/a"}
+    return len({" ".join(item.casefold().split()) for item in items
+                if isinstance(item, str) and item.strip().casefold() not in ignored})
 
 
 def main() -> int:
@@ -103,29 +120,59 @@ def main() -> int:
     if not review:
         errors.append("response has no parseable JSON object or labeled assessment scorecard")
     else:
+        if not review.get("issue_clusters_reported", all(
+            key in review for key in ("moderate_issue_clusters", "severe_issue_clusters")
+        )):
+            errors.append("response must explicitly report both moderate and severe issue clusters")
         if review.get("candidate_id") != context.get("candidate_id"):
             errors.append("candidate_id does not match the source candidate")
         if review.get("website_url") != context.get("website_url"):
             errors.append("website_url does not match the source candidate")
-        verdict = review.get("visual_verdict")
-        score = review.get("visual_opportunity_score")
-        if verdict not in {"high", "medium", "pass", "uncertain"}:
+        model_verdict = review.get("visual_verdict")
+        model_score = review.get("visual_opportunity_score")
+        if model_verdict not in {"high", "medium", "pass", "uncertain"}:
             errors.append("visual_verdict is not an allowed value")
+        if model_verdict == "uncertain":
+            if model_score is not None:
+                errors.append("uncertain verdict must use a null score")
+            calibrated_score, calibrated_verdict = None, "uncertain"
+        elif not isinstance(model_score, int) or isinstance(model_score, bool) or not 0 <= model_score <= 100:
+            errors.append("model-reported visual score must be an integer from 0 to 100")
+            calibrated_score, calibrated_verdict = None, model_verdict
+        else:
+            moderate_count = cluster_count(review, "moderate_issue_clusters")
+            severe_count = cluster_count(review, "severe_issue_clusters")
+            calibrated_score = min(100, 30 + 10 * moderate_count + 20 * severe_count)
+            calibrated_verdict = (
+                "pass" if calibrated_score < 50 else
+                "medium" if calibrated_score < 75 else "high"
+            )
+            review["model_reported_visual_opportunity_score"] = model_score
+            review["model_reported_visual_verdict"] = model_verdict
+            review["visual_opportunity_score"] = calibrated_score
+            review["visual_verdict"] = calibrated_verdict
+            review["score_calibration"] = {
+                "method": "30 + 10 per moderate cluster + 20 per severe cluster, capped at 100",
+                "moderate_cluster_count": moderate_count,
+                "severe_cluster_count": severe_count,
+            }
+        verdict, score = calibrated_verdict, calibrated_score
         if verdict == "uncertain":
             if score is not None:
                 errors.append("uncertain verdict must use a null score")
         elif not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 100:
-            errors.append("visual_opportunity_score must be an integer from 0 to 100")
+            errors.append("calibrated visual opportunity score must be an integer from 0 to 100")
         elif ((verdict == "high" and score < 75)
               or (verdict == "medium" and not 50 <= score <= 74)
               or (verdict == "pass" and score > 49)):
-            errors.append("verdict does not match its score band")
+            errors.append("calibrated verdict does not match its score band")
         if review.get("confidence") not in {"low", "medium", "high"}:
             errors.append("confidence is not an allowed value")
         array_fields = (
             "desktop_top_observations", "desktop_mid_observations",
             "mobile_top_observations", "mobile_mid_observations",
             "desktop_observations", "mobile_observations", "major_issues",
+            "moderate_issue_clusters", "severe_issue_clusters",
             "positive_signals", "recommended_redesign_focus", "limitations",
         )
         for key in array_fields:
