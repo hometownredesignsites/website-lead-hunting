@@ -146,11 +146,21 @@ def run_stage_once(
                 )
             else:
                 followup_prompt = (
-                    "Your previous response did not include the required explicit scorecard. Please retry the "
-                    "visual assessment using the two labeled screenshot sheets already attached and the candidate context "
-                    "in this chat. Follow the original rubric and output format, include the labeled score, "
-                    "verdict, confidence, and observation sections, and return only the concise plain-text "
-                    "scorecard without a preamble."
+                    "Reassess the two labeled screenshot sheets already attached. The score is redesign "
+                    "opportunity, not a rating of how good the site is: 0-49 pass for no material weakness, "
+                    "50-74 medium for a clearly evidenced material weakness, and 75-100 high for a severe "
+                    "or multiple major weaknesses. Return only this exact plain-text template; do not use a "
+                    "score out of 10 or a qualitative verdict:\n"
+                    "Visual opportunity score: <integer 0-100>/100, or uncertain (no score)\n"
+                    "Verdict: <high|medium|pass|uncertain>\n"
+                    "Confidence: <low|medium|high>\n"
+                    "Desktop top observations:\n- <visible evidence>\n"
+                    "Desktop mid observations:\n- <visible evidence>\n"
+                    "Mobile top observations:\n- <visible evidence>\n"
+                    "Mobile mid observations:\n- <visible evidence>\n"
+                    "Desktop observations:\n- <summary>\nMobile observations:\n- <summary>\n"
+                    "Major issues:\n- <issue or None observed>\nPositive signals:\n- <signal>\n"
+                    "Recommended redesign focus:\n- <focus>\nLimitations:\n- <limitation or None noted>"
                 )
             send_prompt(page, followup_composer, followup_prompt)
             settle_prompt_text = followup_prompt
