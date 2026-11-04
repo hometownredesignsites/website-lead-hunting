@@ -38,6 +38,17 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
     return result
 
 
+def has_complete_response_scorecard(response_text: str, review: dict | None = None) -> bool:
+    """Return true only when the response includes a score and all five factors."""
+    review = review or {}
+    has_score = (
+        "visual_opportunity_score" in review
+        or re.search(r"^\s*Visual opportunity score\s*:", response_text, re.IGNORECASE | re.MULTILINE)
+    )
+    factors = parse_factor_assessments(response_text, review)
+    return bool(has_score and set(FACTORS).issubset(factors))
+
+
 def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
     """Prevent unavailable automated checks from being rated as clean."""
     image_status = (audit.get("broken_images") or {}).get("status", "not_run")

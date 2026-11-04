@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from visual_factor_scoring import enforce_script_audit_evidence, normalize_and_score, parse_factor_assessments
+from visual_factor_scoring import (enforce_script_audit_evidence, has_complete_response_scorecard,
+                                   normalize_and_score, parse_factor_assessments)
 from build_human_review_benchmark import assign_stratified_split, summarize
 from validate_chatgpt_visual_review import main as validate_chatgpt_review
 
@@ -134,6 +135,18 @@ class VisualFactorScoringTests(unittest.TestCase):
         self.assertEqual(parsed["hero_imagery"]["severity"], "moderate")
         self.assertEqual(parsed["broken_images"]["source"], "script_audit")
         self.assertNotIn("source=", parsed["broken_images"]["evidence"])
+
+    def test_score_only_response_is_incomplete_until_all_factor_lines_exist(self):
+        score_only = "Visual opportunity score: 62/100\nVerdict: medium"
+        self.assertFalse(has_complete_response_scorecard(score_only))
+        complete = score_only + "\n" + "\n".join((
+            "Hero imagery: minor — text-only hero; source=screenshots",
+            "Readability: none — heading is legible; source=screenshots",
+            "Layout and mobile use: none — controls fit the viewport; source=screenshots",
+            "Broken images: none — no failed images; source=script_audit",
+            "Interactions: none — controls responded; source=script_audit",
+        ))
+        self.assertTrue(has_complete_response_scorecard(complete))
 
     def test_benchmark_splits_by_label_and_reports_misclassification(self):
         rows = [
