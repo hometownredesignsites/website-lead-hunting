@@ -186,6 +186,7 @@ def main() -> int:
             errors.append("calibrated verdict does not match its score band")
         if review.get("confidence") not in {"low", "medium", "high"}:
             errors.append("confidence is not an allowed value")
+        review["script_audit_evidence"] = context.get("script_audit", {"status": "not_available"})
         array_fields = (
             "desktop_top_observations", "desktop_mid_observations",
             "mobile_top_observations", "mobile_mid_observations",

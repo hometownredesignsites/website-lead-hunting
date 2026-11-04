@@ -2,6 +2,8 @@
 
 This rubric defines the durable score written after the four-image visual assessment. It is shared by the ChatGPT and Duck.ai workflows. The scripted technical-priority score is a separate measure and is not part of this calculation.
 
+The visual-review prompt now also carries a structured summary of the initial script audit, including hero-media detection, HTTP and resource findings, broken images, contact/privacy signals, link and interaction checks, content dates, and legacy Twitter branding. The audit is attached to the durable visual scorecard as `script_audit_evidence`. The model must keep that evidence separate from screenshot observations, visual issue clusters, and the screenshot-only visual score. This provides context and preserves provenance without treating a script result as a visual observation.
+
 ## Authoritative score
 
 The validator calculates the durable score from the issue clusters in the assessment:
