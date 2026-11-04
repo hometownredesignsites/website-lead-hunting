@@ -10,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from visual_factor_scoring import (enforce_script_audit_evidence, has_complete_response_scorecard,
                                    normalize_and_score, parse_factor_assessments)
-from build_human_review_benchmark import assign_stratified_split, summarize
+from build_human_review_benchmark import assessment_fields, assign_stratified_split, summarize
 from validate_chatgpt_visual_review import main as validate_chatgpt_review
 
 
@@ -179,6 +179,19 @@ class VisualFactorScoringTests(unittest.TestCase):
         metrics = report["providers"]["chatgpt"]["label_metrics"]["High"]
         self.assertEqual(metrics["false_negative"], 10)
         self.assertEqual(report["provider_score_agreement"]["within_10_points"], 0)
+
+    def test_benchmark_excludes_legacy_scores_and_marks_factor_uncertainty(self):
+        legacy = {"chatgpt_visual_review": {"status": "passed", "visual_opportunity_score": 30}}
+        self.assertEqual(assessment_fields(legacy, "chatgpt")["chatgpt_status"], "not_assessed")
+        self.assertEqual(assessment_fields(legacy, "chatgpt")["chatgpt_assessment_version"], "legacy_excluded")
+        factor = {"chatgpt_visual_review": {
+            "status": "passed", "visual_opportunity_score": None, "visual_verdict": "uncertain",
+            "score_calibration": {"version": "fixed-factors-v1"}, "factor_assessments": {"hero_imagery": {"severity": "minor"}},
+        }}
+        fields = assessment_fields(factor, "chatgpt")
+        self.assertEqual(fields["chatgpt_status"], "uncertain")
+        self.assertEqual(fields["chatgpt_assessment_version"], "fixed-factors-v1")
+        self.assertEqual(fields["chatgpt_score"], None)
 
 
 if __name__ == "__main__":
