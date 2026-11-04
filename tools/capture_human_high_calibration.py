@@ -67,12 +67,12 @@ def main():
                 record["capture_error"]=f"{type(exc).__name__}: {exc}"[:700]
             rows.append(record)
         context.close(); browser.close()
-    (run_dir/"CANDIDATE_LEDGER.jsonl").write_text("".join(json.dumps(row,ensure_ascii=False)+"\n" for row in rows),encoding="utf-8")
+    (run_dir/"CANDIDATE_LEDGER.jsonl").write_text("".join(json.dumps(row,ensure_ascii=False)+chr(10) for row in rows),encoding="utf-8")
     manifest={"run_key":run_dir.name,"run_type":"human_high_calibration_capture",
               "created_at":datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "target_count":len(rows),"capture_method":"Playwright Chromium, desktop/mobile full-page screenshots",
               "human_labels_are_not_sent_to_visual_model":True}
-    (run_dir/"RUN_MANIFEST.json").write_text(json.dumps(manifest,indent=2)+"\n",encoding="utf-8")
+    (run_dir/"RUN_MANIFEST.json").write_text(json.dumps(manifest,indent=2)+chr(10),encoding="utf-8")
     print(json.dumps({"target_count":len(rows),"loaded":sum(r["site_check_status"]=="loaded" for r in rows),
                       "failed":sum(r["site_check_status"]!="loaded" for r in rows),
                       "candidate_ids":[r["candidate_id"] for r in rows]},indent=2))
