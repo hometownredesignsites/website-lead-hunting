@@ -116,9 +116,9 @@ def main() -> int:
                 errors.append("uncertain verdict must use a null score")
         elif not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 100:
             errors.append("visual_opportunity_score must be an integer from 0 to 100")
-        elif ((verdict == "high" and score < 70)
-              or (verdict == "medium" and not 35 <= score <= 69)
-              or (verdict == "pass" and score > 34)):
+        elif ((verdict == "high" and score < 75)
+              or (verdict == "medium" and not 50 <= score <= 74)
+              or (verdict == "pass" and score > 49)):
             errors.append("verdict does not match its score band")
         if review.get("confidence") not in {"low", "medium", "high"}:
             errors.append("confidence is not an allowed value")
