@@ -86,6 +86,17 @@ Tools
         self.assertNotIn("for attempt in 1 2 3", review_jobs)
         self.assertNotIn("duckai-visual-review-profile-$REVIEW_CANDIDATE_ID-$attempt", review_jobs)
 
+    def test_missing_scorecard_followup_requests_all_five_factors(self):
+        stage_runner = Path("tools/playwright_runner/stage_runner.py").read_text(encoding="utf-8")
+        followup = stage_runner.split('"Factor assessments:\\n"', 1)[1]
+        for label in (
+            "Hero imagery:", "Readability:", "Layout and mobile use:",
+            "Broken images:", "Interactions:",
+        ):
+            self.assertIn(label, followup)
+        self.assertIn("source=screenshots", followup)
+        self.assertIn("source=script_audit", followup)
+
     def test_missing_source_artifact_is_a_permanent_candidate_failure(self):
         decision = classify_attempt(
             source_artifact_available=False,

@@ -160,7 +160,13 @@ def run_stage_once(
                     "Mobile mid observations:\n- <visible evidence>\n"
                     "Desktop observations:\n- <summary>\nMobile observations:\n- <summary>\n"
                     "Major issues:\n- <issue or None observed>\nPositive signals:\n- <signal>\n"
-                    "Recommended redesign focus:\n- <focus>\nLimitations:\n- <limitation or None noted>"
+                    "Recommended redesign focus:\n- <focus>\nLimitations:\n- <limitation or None noted>\n"
+                    "Factor assessments:\n"
+                    "Hero imagery: <none|minor|moderate|severe|not_assessable> — <specific screenshot evidence; source=screenshots>\n"
+                    "Readability: <none|minor|moderate|severe|not_assessable> — <specific screenshot evidence; source=screenshots>\n"
+                    "Layout and mobile use: <none|minor|moderate|severe|not_assessable> — <specific screenshot evidence; source=screenshots>\n"
+                    "Broken images: <none|minor|moderate|severe|not_assessable> — <specific audit evidence; source=script_audit>\n"
+                    "Interactions: <none|minor|moderate|severe|not_assessable> — <specific audit evidence; source=script_audit>"
                 )
             send_prompt(page, followup_composer, followup_prompt)
             settle_prompt_text = followup_prompt
