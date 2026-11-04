@@ -74,10 +74,23 @@ def commit(repo: Path, paths: list[str], message: str) -> bool:
     if not branch:
         raise RuntimeError("Private results checkout is detached; refusing to push")
     encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
-    subprocess.run(["git", "-C", str(repo), "-c",
+    push_command = ["git", "-C", str(repo), "-c",
                     f"http.extraheader=AUTHORIZATION: basic {encoded}",
-                    "push", "origin", f"HEAD:{branch}"], check=True,
-                   text=True, capture_output=True)
+                    "push", "origin", f"HEAD:{branch}"]
+    for attempt in range(3):
+        pushed = subprocess.run(push_command, check=False, text=True, capture_output=True)
+        if pushed.returncode == 0:
+            break
+        if attempt == 2:
+            raise subprocess.CalledProcessError(pushed.returncode, push_command,
+                                                output=pushed.stdout, stderr=pushed.stderr)
+        print(f"Private results branch advanced during push; rebasing and retrying ({attempt + 1}/2).")
+        git(repo, "fetch", "origin", branch)
+        try:
+            git(repo, "rebase", f"origin/{branch}")
+        except subprocess.CalledProcessError:
+            git(repo, "rebase", "--abort", check=False)
+            raise
     print(f"Committed private results to {branch}.")
     return True
 
