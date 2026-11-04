@@ -1,0 +1,69 @@
+name: Capture human-high calibration sites
+
+on:
+  workflow_dispatch:
+    inputs:
+      calibration_run_key:
+        description: "Private run key for this matched provider calibration capture"
+        required: true
+        default: "human-high-calibration-20261104"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: website-lead-hunt-private-operations-${{ github.repository }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.58.0-noble
+      options: --user root
+    steps:
+      - name: Check out public workflow code
+        uses: actions/checkout@v5
+      - name: Check out private calibration inputs and ChatGPT results branch
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results-chatgpt
+      - name: Check out private Duck.ai results branch
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: git-duckai
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results-duckai
+      - name: Capture matched screenshots and save private run ledgers
+        env:
+          CALIBRATION_RUN_KEY: ${{ inputs.calibration_run_key }}
+        run: |
+          if ! [[ "$CALIBRATION_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+            echo "calibration_run_key contains invalid characters" >&2
+            exit 1
+          fi
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python tools/capture_human_high_calibration.py \
+            --targets-csv private-results-chatgpt/config/calibration_human_high_targets.csv \
+            --run-dir "runs/$CALIBRATION_RUN_KEY"
+          python tools/private_results.py commit-run --private-repo private-results-chatgpt \
+            --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
+          python tools/private_results.py commit-run --private-repo private-results-duckai \
+            --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
+      - name: Upload temporary screenshots for both provider reviews
+        uses: actions/upload-artifact@v6
+        with:
+          name: lead-hunt-${{ inputs.calibration_run_key }}-${{ github.run_id }}
+          path: runs/${{ inputs.calibration_run_key }}/
+          if-no-files-found: error
+          retention-days: 7
