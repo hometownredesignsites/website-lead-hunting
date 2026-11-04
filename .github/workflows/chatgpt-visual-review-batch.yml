@@ -436,7 +436,22 @@ jobs:
         if: always()
         env:
           RUN_KEY: ${{ needs.plan.outputs.run_key }}
-        run: python tools/validate_run.py --run-dir "runs/$RUN_KEY" --write-summary
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+
+          run_dir = Path("runs") / os.environ["RUN_KEY"]
+          manifest_path = run_dir / "RUN_MANIFEST.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+          if manifest.get("run_type") == "human_high_calibration_capture":
+              message = "Calibration screenshot cohort: lead-hunt run validation is not applicable."
+              print(message)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write("\n" + message + "\n")
+          else:
+              subprocess.run(["python", "tools/validate_run.py", "--run-dir", str(run_dir), "--write-summary"], check=True)
+          PY
 
       - name: Refresh high and medium candidate export
         if: always()
