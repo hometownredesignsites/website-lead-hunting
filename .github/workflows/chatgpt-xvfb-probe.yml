@@ -159,8 +159,7 @@ jobs:
           elif [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
             image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/desktop_top.jpg)
             image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/desktop_mid.jpg)
-            image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/mobile_top.jpg)
-            image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/mobile_mid.jpg)
+            image_args+=(--image-file artifacts/duckai-xvfb-probe/website-review/mobile_review_sheet.jpg)
           fi
           context_args=()
           if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
