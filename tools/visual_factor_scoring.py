@@ -22,9 +22,7 @@ FACTOR_SOURCES = {
 def parse_factor_assessments(response_text: str, review: dict) -> dict:
     """Parse fixed factor assessments from labeled text or JSON review data."""
     factors = review.get("factor_assessments") or review.get("factors")
-    if isinstance(factors, dict):
-        return factors
-    result = {}
+    result = dict(factors) if isinstance(factors, dict) else {}
     label_to_key = {label.casefold(): key for key, label in FACTORS.items()}
     labels = "|".join(re.escape(label) for label in FACTORS.values())
     pattern = re.compile(
@@ -44,7 +42,7 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
         # Ignore the section heading and unrelated content before the first factor.
         if evidence:
             severity = match.group("severity").casefold().replace(" ", "_").replace("-", "_")
-            result[key] = {"severity": severity, "evidence": evidence, "source": FACTOR_SOURCES[key]}
+            result.setdefault(key, {"severity": severity, "evidence": evidence, "source": FACTOR_SOURCES[key]})
     return result
 
 
