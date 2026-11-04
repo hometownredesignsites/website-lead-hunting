@@ -12,7 +12,7 @@ Actions logs and artifacts remain associated with the public repository. They ma
 
 The orchestration uses two CSVs with different visibility and owners:
 
-- `website-lead-hunting-operations/config/business_categories.csv` — private source of business types; the business-type field must be the exact lowercase `category` column. If the source also has uppercase `Category`, that column is treated as the broader group label, not the business type. The imported category catalog preserves its other source columns as metadata.
+- `website-lead-hunting-operations/config/business_categories.csv` — private source of business types; requires an exact lowercase `category` column. The imported category catalog preserves its other source columns as metadata.
 - Public `config/cities.csv` — upload the city list to this path on the `git-chatgpt` branch. It must have one `city` column and no more than 20 rows. Quote names containing commas. A starter file is [config/cities.example.csv](config/cities.example.csv).
 
 Uploading or committing `config/cities.csv` starts the city-upload workflow. That city list is public and remains in public Git history. The workflow snapshots both inputs into the private operations repository before it dispatches work, so later city-list edits do not change an active campaign. A new commit to the city CSV starts a new campaign. The category catalog remains private and does not trigger Actions when it changes.
