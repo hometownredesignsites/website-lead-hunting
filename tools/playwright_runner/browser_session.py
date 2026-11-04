@@ -166,31 +166,44 @@ def looks_like_non_answer_text(text: str) -> bool:
 
 
 def set_composer_text(composer, text: str) -> None:
-    handle = composer.element_handle()
-    if handle is None:
-        raise RuntimeError("Failed to resolve composer element.")
-    handle.evaluate(
-        """(el, value) => {
-            const isEditable = el.getAttribute('contenteditable') === 'true' || el.isContentEditable;
-            if (isEditable) {
-                el.focus();
-                el.textContent = '';
-                const lines = value.split('\\n');
-                for (let i = 0; i < lines.length; i++) {
-                    if (i > 0) el.appendChild(document.createElement('br'));
-                    el.appendChild(document.createTextNode(lines[i]));
+    try:
+        # Use Playwright's native fill so React-controlled textareas receive the
+        # same input events as a user typing. Duck.ai otherwise leaves the
+        # composer visually empty even when its DOM value is assigned directly.
+        composer.fill(text, timeout=5000)
+    except Exception:
+        handle = composer.element_handle()
+        if handle is None:
+            raise RuntimeError("Failed to resolve composer element.")
+        handle.evaluate(
+            """(el, value) => {
+                const isEditable = el.getAttribute('contenteditable') === 'true' || el.isContentEditable;
+                if (isEditable) {
+                    el.focus();
+                    el.textContent = '';
+                    const lines = value.split('\\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        if (i > 0) el.appendChild(document.createElement('br'));
+                        el.appendChild(document.createTextNode(lines[i]));
+                    }
+                    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return;
                 }
+                el.focus();
+                el.value = value;
                 el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                return;
-            }
-            el.focus();
-            el.value = value;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }""",
-        text,
-    )
+            }""",
+            text,
+        )
+
+    handle = composer.element_handle()
+    actual = handle.evaluate(
+        "(el) => (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) ? el.innerText : el.value"
+    ) if handle is not None else ""
+    if (actual or "").strip() != text.strip():
+        raise RuntimeError("Duck.ai composer did not retain the full prompt text.")
 
 
 def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -> list[dict]:
@@ -288,6 +301,8 @@ def send_prompt(page, composer, prompt_text: str) -> None:
         composer.click(force=True, timeout=3000)
     set_composer_text(composer, prompt_text)
     send_selectors = [
+        "button[aria-label='Ask']",
+        "button[aria-label^='Ask ']",
         "button[aria-label*='Send message']",
         "button[aria-label='Send']",
         "button[data-testid='send-button']",
