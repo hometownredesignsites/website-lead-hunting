@@ -51,6 +51,7 @@ jobs:
         env:
           CALIBRATION_RUN_KEY: ${{ inputs.calibration_run_key }}
           PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+        shell: bash
         run: |
           if ! [[ "$CALIBRATION_RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
             echo "calibration_run_key contains invalid characters" >&2
