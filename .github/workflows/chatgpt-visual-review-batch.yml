@@ -38,7 +38,7 @@ permissions:
 
 # Share the repository-wide lock with every writer of the private operations repository.
 concurrency:
-  group: website-lead-hunt-private-operations-${{ github.repository }}
+  group: ${{ startsWith(inputs.review_run_key, 'human-high-calibration-') && format('human-high-calibration-{0}', github.repository) || format('website-lead-hunt-private-operations-{0}', github.repository) }}
   queue: max
   cancel-in-progress: false
 
