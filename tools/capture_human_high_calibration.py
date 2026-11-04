@@ -46,18 +46,6 @@ def candidate_id(index: int, host: str) -> str:
 def capture(page, url: str, path: Path, width: int, height: int) -> dict:
     page.set_viewport_size({"width": width, "height": height})
     response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    if width <= 500:
-        # Legacy sites without a viewport declaration otherwise render at 980px wide.
-        page.evaluate("""() => {
-          let viewport = document.querySelector('meta[name="viewport"]');
-          if (!viewport) {
-            viewport = document.createElement('meta');
-            viewport.name = 'viewport';
-            document.head.appendChild(viewport);
-          }
-          viewport.content = 'width=device-width, initial-scale=1';
-        }""")
-        page.wait_for_timeout(250)
     page.wait_for_timeout(900)
     try:
         page.evaluate("""async () => {
@@ -77,6 +65,11 @@ def capture(page, url: str, path: Path, width: int, height: int) -> dict:
     except Exception:
         page.screenshot(path=str(path), full_page=False, animations="disabled", timeout=15000)
         mode = "viewport_fallback"
+    if width <= 500:
+        from PIL import Image
+        with Image.open(path) as screenshot:
+            if screenshot.width > width:
+                screenshot.crop((0, 0, width, screenshot.height)).save(path)
     return {"status": "saved", "path": path.resolve().relative_to(Path.cwd().resolve()).as_posix(), "mode": mode,
             "http_status": response.status if response else None,
             "final_url": page.url, "viewport": {"width": width, "height": height}}
@@ -101,6 +94,20 @@ def main() -> int:
                                              device_scale_factor=1, is_mobile=True, has_touch=True)
         desktop_page = desktop_context.new_page()
         mobile_page = mobile_context.new_page()
+        mobile_page.add_init_script("""(() => {
+          const ensureViewport = () => {
+            if (!document.head) return;
+            let viewport = document.querySelector('meta[name="viewport"]');
+            if (!viewport) {
+              viewport = document.createElement('meta');
+              viewport.name = 'viewport';
+              document.head.appendChild(viewport);
+            }
+            viewport.content = 'width=device-width, initial-scale=1';
+          };
+          new MutationObserver(ensureViewport).observe(document, {childList: true, subtree: true});
+          ensureViewport();
+        })();""")
         for index, target in enumerate(targets, 1):
             business = (target.get("business") or "").strip()
             location = (target.get("location") or "").strip()
