@@ -21,8 +21,23 @@ def main() -> int:
         raise ValueError("Campaign input snapshots are missing from the private results checkout")
     with category_source.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
-        headers = {str(name).strip().casefold(): name for name in (reader.fieldnames or [])}
-        field = headers.get("category")
+        fieldnames = reader.fieldnames or []
+        exact_matches = [name for name in fieldnames if str(name).strip() == "category"]
+        if len(exact_matches) > 1:
+            raise ValueError("The campaign business_categories.csv has duplicate 'category' columns")
+        if exact_matches:
+            # The source file may also contain "Category" for the broader
+            # category group. Prefer the exact, lowercase business-type field.
+            field = exact_matches[0]
+        else:
+            normalized_matches = [name for name in fieldnames
+                                  if str(name).strip().casefold() == "category"]
+            if len(normalized_matches) > 1:
+                raise ValueError(
+                    "The campaign business_categories.csv has ambiguous category headers; "
+                    "include an exact lowercase 'category' business-type column"
+                )
+            field = normalized_matches[0] if normalized_matches else None
         if not field:
             raise ValueError("The campaign business_categories.csv requires a 'category' column")
         rows = list(reader)
