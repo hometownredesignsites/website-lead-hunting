@@ -102,9 +102,18 @@ def cluster_count(review: dict, key: str) -> int:
     items = review.get(key)
     if not isinstance(items, list):
         return 0
-    ignored = {"none observed", "none identified", "none noted", "none", "n/a"}
-    return len({" ".join(item.casefold().split()) for item in items
-                if isinstance(item, str) and item.strip().casefold() not in ignored})
+    empty_cluster = re.compile(
+        r"^(?:none(?:\s+(?:observed|identified|noted))?|n\s*/\s*a|no\s+issues?)(?:[.!\s]*)$",
+        re.IGNORECASE,
+    )
+    normalized = {
+        " ".join(item.casefold().split())
+        for item in items
+        if isinstance(item, str)
+        and item.strip()
+        and not empty_cluster.fullmatch(item.strip())
+    }
+    return len(normalized)
 
 
 def validate_image_uploads(metadata: dict, context: dict) -> dict:
