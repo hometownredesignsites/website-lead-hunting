@@ -6,9 +6,18 @@ from pathlib import Path
 from tools.merge_duckai_visual_reviews import merge
 from tools.prepare_duckai_visual_review import validate_source_viewport
 from tools.visual_review_status import classify_attempt
+from tools.playwright_runner.stage_runner import split_image_batches
 
 
 class VisualReviewRecoveryTests(unittest.TestCase):
+    def test_duckai_screenshot_batches_respect_three_image_message_limit(self):
+        paths = [Path(f"image-{index}.jpg") for index in range(4)]
+        batches = split_image_batches(paths)
+        self.assertEqual([[path.name for path in batch] for batch in batches], [
+            ["image-0.jpg", "image-1.jpg", "image-2.jpg"],
+            ["image-3.jpg"],
+        ])
+
     def test_batch_workflow_uses_proven_in_session_retry_behavior(self):
         workflow = Path(".github/workflows/chatgpt-visual-review-batch.yml").read_text(encoding="utf-8")
         review_jobs = workflow.split("\n  notify_city_campaign:", 1)[0]
