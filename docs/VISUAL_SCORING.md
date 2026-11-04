@@ -1,55 +1,44 @@
 # Visual opportunity scoring
 
-This rubric defines the durable score written after the four-image visual assessment. It is shared by the ChatGPT and Duck.ai workflows. The scripted technical-priority score is a separate measure and is not part of this calculation.
+This rubric is shared by the ChatGPT and Duck.ai visual-review workflows. Scripted technical priority remains a separate initial measure. The visual review receives structured script-audit evidence and four screenshot views; each source is used only for the factors it can support.
 
-The visual-review prompt now also carries a structured summary of the initial script audit, including hero-media detection, HTTP and resource findings, broken images, contact/privacy signals, link and interaction checks, content dates, and legacy Twitter branding. The audit is attached to the durable visual scorecard as `script_audit_evidence`. The model must keep that evidence separate from screenshot observations, visual issue clusters, and the screenshot-only visual score. This provides context and preserves provenance without treating a script result as a visual observation.
+## Required factors
 
-## Authoritative score
+Each completed assessment must rate all five factors and include specific supporting evidence:
 
-The validator calculates the durable score from the issue clusters in the assessment:
+| Factor | Evidence source | What it covers |
+| --- | --- | --- |
+| Hero imagery | Screenshots | Presence and presentation of meaningful first-view imagery |
+| Readability | Screenshots | Legibility of visible text, including text over imagery |
+| Layout and mobile use | Screenshots | Hierarchy, content organization, and desktop/mobile usability |
+| Broken images | Script audit | Failed image loads and the audit's lazy-load results |
+| Interactions | Script audit | Tested controls and interaction failures |
 
-```text
-score = min(100, 30 + 10 × moderate_cluster_count + 20 × severe_cluster_count)
-```
+The model must not describe script findings as visually observed. Visual observations and script evidence remain separately identified in the scorecard.
 
-The score bands are:
+## Durable score
 
-| Durable score | Verdict |
-| --- | --- |
-| 0–49 | Pass |
-| 50–74 | Medium |
-| 75–100 | High |
-| No score | Uncertain |
+The validator calculates the score from these fixed factor ratings, not from how many issue sentences or clusters the model writes:
 
-The formula advances in ten-point steps, so the first reachable High score is 80. Examples: five moderate clusters produce 80; one severe plus three moderate clusters produce 80; two severe plus one moderate cluster produce 80. Two severe clusters alone produce 70, which is Medium.
+| Factor severity | Points |
+| --- | ---: |
+| None | 0 |
+| Minor | 5 |
+| Moderate | 25 |
+| Severe | 50 |
 
-`visual_opportunity_score` and `visual_verdict` are the authoritative, recalculated values. The model's response is retained separately in `model_reported_visual_opportunity_score` and `model_reported_visual_verdict` for audit. The model's raw score does not determine the durable score or verdict. If the visual evidence is insufficient and the response is `uncertain`, the score stays null.
+`score = min(100, sum(points for the five factors))`
 
-## What counts as an issue cluster
+Verdict bands remain Pass 0–49, Medium 50–74, and High 75–100. The model-reported score/verdict are retained separately; the validator-calculated score and verdict are authoritative.
 
-- Count distinct, screenshot-supported root problems with a clear user-facing impact.
-- Count a repeated observation of the same root problem once, even if it appears in multiple views. The assessment prompt asks the model to consolidate these; the validator counts the submitted cluster entries and does not independently deduplicate them.
-- Do not count minor polish, preferences, speculative impacts, or ambiguous text sizing as material issues.
-- A moderate cluster adds 10 points; a severe cluster adds 20. Severity is based on the demonstrated impact in the screenshots, not on the number of observations.
-- `None observed`, `none`, `n/a`, and similar empty-list markers do not count as clusters.
+If a factor is explicitly `not_assessable`, the result is Uncertain with a null score. Missing factor ratings or supporting evidence invalidate the scorecard and trigger the existing failure/retry path. The validator never silently assigns zero to missing evidence.
 
-## Missing severity headings
+## Durable evidence
 
-When either the `Moderate issue clusters` or `Severe issue clusters` section is missing from a response, the validator uses the listed `Major issues` as a fallback: each non-empty major issue counts as one moderate cluster, and no severe clusters are inferred. The scorecard records this source as `major_issues_moderate_fallback`; when both severity sections are present, it records `explicit_issue_clusters` and counts those sections instead.
+Each accepted scorecard stores the normalized factor ratings, factor evidence and source, structured script-audit summary, screenshot observations, explanatory issue notes, the model-reported score/verdict, and the complete raw model response. The private candidate ledger retains these with the durable calculated score. Screenshots and detailed browser diagnostics remain in the public workflow's seven-day artifact.
 
-This fallback keeps otherwise usable guest-chat responses scoreable while avoiding an unsupported severe classification. It can make the durable score differ from the model's raw score and verdict.
+## Human-label calibration
 
-## Paired example: Christie's
+The benchmark joins the interactive `decision` field to the newest provider scorecards by normalized host. It reports coverage, per-label outcome comparisons, provider agreement, and score differences. Use a deterministic, stratified holdout for evaluation; do not use holdout sites to tune factors or thresholds. The current human file has 21 High and 42 Medium labels, no Pass examples, and only a subset currently matched to assessments. Assess the missing labeled sites and add human-reviewed Pass examples before making claims about balanced accuracy or threshold quality.
 
-The same candidate and lead-hunt screenshot artifact were reviewed on both branches:
-
-| Provider branch | Workflow run | Model-reported score/verdict | Durable score/verdict | Evidence used |
-| --- | --- | --- | --- | --- |
-| `git-chatgpt` | [41771379776](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41771379776) | 30 / Pass | 30 / Pass | No issue clusters reported |
-| `git-duckai` | [41771342547](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41771342547) | 55 / Medium | 40 / Pass | Severity sections were omitted; one major issue was counted as one moderate cluster |
-
-The durable scores are ten points apart and both classify the site as Pass. The raw model scores are retained for transparency and can differ more because the providers may describe or rate the same evidence differently. Shared calibration makes the output scale consistent; it does not guarantee identical model judgments.
-
-## Where scorecards are stored
-
-The public ChatGPT and Duck.ai workflows write durable scorecards to their corresponding branches in `hometownredesignsites/website-lead-hunting-operations`. Candidate records use `chatgpt_visual_review` or `duckai_visual_review` and include the durable score, raw model score, verdicts, cluster counts, and calibration source. Screenshots and detailed inference diagnostics remain in the public workflow's short-lived Actions artifact.
+See [HUMAN_REVIEW_BENCHMARK.md](HUMAN_REVIEW_BENCHMARK.md) for benchmark use and limitations.
