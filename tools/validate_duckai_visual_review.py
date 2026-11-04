@@ -7,7 +7,10 @@ import json
 import re
 from pathlib import Path
 
-from playwright_runner.prompt_contracts import extract_json_payload
+try:
+    from playwright_runner.prompt_contracts import extract_json_payload
+except ModuleNotFoundError:
+    from tools.playwright_runner.prompt_contracts import extract_json_payload
 
 
 SECTION_KEYS = {
@@ -79,6 +82,31 @@ def parse_labeled_text(response_text: str, context: dict) -> dict | None:
     }
 
 
+def validate_image_uploads(metadata: dict, context: dict) -> dict:
+    attachment_records = metadata.get("image_attachments") or []
+    uploaded_names = {item.get("filename") for item in attachment_records
+                      if item.get("status") == "uploaded"}
+    upload_images = context.get("upload_images", [])
+    expected_names = {item.get("filename") for item in upload_images}
+    source_names = {item.get("filename") for item in context.get("screenshots", [])}
+    covered = [name for item in upload_images for name in item.get("covers", [])]
+    covered_names = set(covered)
+    errors = []
+    if (uploaded_names != expected_names or len(attachment_records) != len(expected_names)
+            or len(expected_names) != 2):
+        errors.append("both expected desktop/mobile review sheets were not confirmed uploaded")
+    if len(source_names) != 4:
+        errors.append("candidate context must list exactly four source top/mid desktop/mobile screenshots")
+    if covered_names != source_names or len(covered) != 4:
+        errors.append("review sheets do not cover all four source top/mid screenshots exactly")
+    return {
+        "errors": errors,
+        "expected_uploaded_images": sorted(expected_names),
+        "confirmed_uploaded_images": sorted(uploaded_names),
+        "covered_source_screenshots": sorted(covered_names),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--response", type=Path, required=True)
@@ -95,11 +123,9 @@ def main() -> int:
     if review is None:
         review = parse_labeled_text(response_text, context)
         response_format = "labeled_text" if review is not None else "unparsed"
-    attachment_records = metadata.get("image_attachments") or []
-    uploaded_names = {item.get("filename") for item in attachment_records
-                      if item.get("status") == "uploaded"}
-    expected_names = {item.get("filename") for item in context.get("screenshots", [])}
     errors: list[str] = []
+    image_validation = validate_image_uploads(metadata, context)
+    errors.extend(image_validation["errors"])
     if not review:
         errors.append("response has no parseable JSON object or labeled assessment scorecard")
     else:
@@ -136,17 +162,13 @@ def main() -> int:
                     "desktop_observations", "mobile_observations"):
             if not review.get(key):
                 errors.append(f"{key} must be non-empty")
-    if uploaded_names != expected_names or len(attachment_records) != len(expected_names):
-        errors.append("all expected desktop/mobile top and mid screenshots were not confirmed uploaded")
-    if len(expected_names) != 4:
-        errors.append("candidate context must list exactly four top/mid desktop/mobile screenshots")
-
     result = {
         "status": "passed" if not errors else "failed",
         "response_format": response_format,
         "candidate_id": context.get("candidate_id"),
-        "expected_uploaded_images": sorted(expected_names),
-        "confirmed_uploaded_images": sorted(uploaded_names),
+        **{key: image_validation[key] for key in (
+            "expected_uploaded_images", "confirmed_uploaded_images", "covered_source_screenshots"
+        )},
         "review": review,
         "errors": errors,
     }

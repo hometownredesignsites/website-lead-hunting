@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -59,6 +59,46 @@ def resolve_screenshot(record_path: str, run_dir: Path) -> Path | None:
     if resolved.is_file() and resolved.suffix.lower() in IMAGE_SUFFIXES:
         return resolved
     return None
+
+
+def make_review_sheet(viewport: str, views: list[dict], output_dir: Path) -> dict:
+    """Stack a viewport's labeled top and mid crops into one Duck.ai upload."""
+    ordered = sorted(views, key=lambda item: (0 if item["view"] == "top" else 1))
+    if [item["view"] for item in ordered] != ["top", "mid"]:
+        raise ValueError(f"Expected top and mid screenshots for {viewport}")
+    images = [Image.open(item["path"]).convert("RGB") for item in ordered]
+    width = max(image.width for image in images)
+    banner = 42
+    gap = 12
+    height = sum(image.height + banner for image in images) + gap
+    sheet = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 22)
+    except OSError:
+        font = ImageFont.load_default()
+    y = 0
+    covers = []
+    for index, (item, image) in enumerate(zip(ordered, images)):
+        label = f"{viewport.upper()} — {item['view'].upper()} VIEW"
+        draw.rectangle((0, y, width, y + banner), fill=(28, 42, 62))
+        draw.text((16, y + 8), label, fill="white", font=font)
+        y += banner
+        sheet.paste(image, (0, y))
+        y += image.height + (gap if index == 0 else 0)
+        covers.append(item["filename"])
+    target = output_dir / f"{viewport}_review_sheet.jpg"
+    sheet.save(target, format="JPEG", quality=88, optimize=True)
+    for image in images:
+        image.close()
+    return {
+        "viewport": viewport,
+        "filename": target.name,
+        "path": str(target),
+        "covers": covers,
+        "dimensions": {"width": sheet.width, "height": sheet.height},
+        "bytes": target.stat().st_size,
+    }
 
 
 def main() -> int:
@@ -126,8 +166,13 @@ def main() -> int:
                          "scrollable_height_px": item["scrollable_height_px"]}
                         for item in images],
     }
+    upload_images = [make_review_sheet(viewport,
+                      [item for item in images if item["viewport"] == viewport], output_dir)
+                     for viewport in ("desktop", "mobile")]
+    context["upload_images"] = [{key: image[key] for key in ("viewport", "filename", "covers", "dimensions")}
+                                for image in upload_images]
     instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
-Use only what is visible in the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page; the mid views are viewport crops taken at 35% of the desktop and 60% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that screenshots cannot establish (such as current business status, licensing, technology, or whether forms work). If an image is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined evidence is insufficient.
+Use only the two supplied labeled contact sheets: desktop_review_sheet.jpg and mobile_review_sheet.jpg. Each sheet stacks its viewport's TOP view first and MID view second; the dark divider labels each panel. The top views show the start of each page; the mid views are viewport crops taken at 35% of the desktop and 60% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that screenshots cannot establish (such as current business status, licensing, technology, or whether forms work). If a panel is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined evidence is insufficient.
 
 Score redesign opportunity with an integer from 0 to 100: higher means stronger visual evidence that a redesign could materially improve the site. Assess the material impact of the visible issues, not how many refinements you can suggest. A polished, credible site with strong relevant imagery, clear services/contact, and usable desktop/mobile layouts is pass when its remaining observations are preferences or minor polish.
 
@@ -142,13 +187,13 @@ Visual opportunity score: <integer 0-100>/100, or "uncertain (no score)" when th
 Verdict: <high|medium|pass|uncertain>
 Confidence: <low|medium|high>
 Desktop top observations:
-- <one concise observation tied to desktop_top.jpg>
+- <one concise observation tied to the TOP panel of desktop_review_sheet.jpg>
 Desktop mid observations:
-- <one concise observation tied to desktop_mid.jpg>
+- <one concise observation tied to the MID panel of desktop_review_sheet.jpg>
 Mobile top observations:
-- <one concise observation tied to mobile_top.jpg>
+- <one concise observation tied to the TOP panel of mobile_review_sheet.jpg>
 Mobile mid observations:
-- <one concise observation tied to mobile_mid.jpg>
+- <one concise observation tied to the MID panel of mobile_review_sheet.jpg>
 Desktop observations:
 - <summary across both desktop views>
 Mobile observations:
@@ -162,12 +207,13 @@ Recommended redesign focus:
 Limitations:
 - <limitation, or "None noted">
 Use at least one concise bullet in every section. Do not add a preamble. Keep the explicit score and verdict near the top. The Python workflow will normalize this labeled response into JSON. Do not claim a check succeeded unless the screenshots show that evidence."""
-    prompt = "Assess all four supplied screenshots and score the visual redesign opportunity under the rubric. Match filenames to the viewport and view names in the supplied context. Use the candidate context only for identity; base the score on visible screenshot evidence across the top and mid-page views. Return the concise labeled text format requested in the instructions."
+    prompt = "Assess both supplied labeled contact sheets and score the visual redesign opportunity under the rubric. Each contains top and mid views for its viewport. Use the candidate context only for identity; base the score on visible screenshot evidence across all four panels. Return the concise labeled text format requested in the instructions."
     (output_dir / "candidate-context.json").write_text(json.dumps(context, indent=2) + "\n", encoding="utf-8")
     (output_dir / "instructions.txt").write_text(instructions + "\n", encoding="utf-8")
     (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
     (output_dir / "input-manifest.json").write_text(json.dumps({"context": context, "images": images}, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"output_dir": str(output_dir), "candidate": context, "images": images}, indent=2))
+    print(json.dumps({"output_dir": str(output_dir), "candidate": context,
+                      "images": images, "upload_images": upload_images}, indent=2))
     return 0
 
 

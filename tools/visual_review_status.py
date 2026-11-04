@@ -13,6 +13,7 @@ IDENTITY_ERRORS = (
     "candidate_id does not match the source candidate",
     "website_url does not match the source candidate",
     "candidate context must list exactly four",
+    "review sheets do not cover all four source top/mid screenshots exactly",
 )
 TRANSIENT_RUNNER_MARKERS = (
     "duck.ai did not confirm all uploaded images",
@@ -78,7 +79,7 @@ def classify_attempt(
                 "error": identity_error}
 
     if errors:
-        if any("screenshots were not confirmed uploaded" in error for error in errors):
+        if any("review sheets were not confirmed uploaded" in error for error in errors):
             failure_class = "screenshot_upload_unconfirmed"
         elif any("no parseable" in error for error in errors):
             failure_class = "blank_or_unparseable_response"

@@ -4,19 +4,48 @@ import unittest
 from pathlib import Path
 
 from tools.merge_duckai_visual_reviews import merge
-from tools.prepare_duckai_visual_review import validate_source_viewport
+from tools.prepare_duckai_visual_review import make_review_sheet, validate_source_viewport
 from tools.visual_review_status import classify_attempt
-from tools.playwright_runner.stage_runner import split_image_batches
+from tools.validate_duckai_visual_review import validate_image_uploads
+from PIL import Image
 
 
 class VisualReviewRecoveryTests(unittest.TestCase):
-    def test_duckai_screenshot_batches_respect_three_image_message_limit(self):
-        paths = [Path(f"image-{index}.jpg") for index in range(4)]
-        batches = split_image_batches(paths)
-        self.assertEqual([[path.name for path in batch] for batch in batches], [
-            ["image-0.jpg", "image-1.jpg", "image-2.jpg"],
-            ["image-3.jpg"],
-        ])
+    def test_labeled_contact_sheet_covers_top_and_mid_source_views(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            views = []
+            for view, color in (("top", "red"), ("mid", "blue")):
+                path = root / f"desktop_{view}.jpg"
+                Image.new("RGB", (960, 500), color).save(path)
+                views.append({"view": view, "filename": path.name, "path": str(path)})
+            sheet = make_review_sheet("desktop", views, root)
+            self.assertEqual(sheet["filename"], "desktop_review_sheet.jpg")
+            self.assertEqual(sheet["covers"], ["desktop_top.jpg", "desktop_mid.jpg"])
+            with Image.open(sheet["path"]) as image:
+                self.assertEqual(image.width, 960)
+                self.assertGreater(image.height, 1000)
+
+    def test_contact_sheet_upload_validation_checks_two_sheets_and_four_views(self):
+        context = {
+            "screenshots": [{"filename": f"{viewport}_{view}.jpg"}
+                            for viewport in ("desktop", "mobile")
+                            for view in ("top", "mid")],
+            "upload_images": [
+                {"filename": "desktop_review_sheet.jpg",
+                 "covers": ["desktop_top.jpg", "desktop_mid.jpg"]},
+                {"filename": "mobile_review_sheet.jpg",
+                 "covers": ["mobile_top.jpg", "mobile_mid.jpg"]},
+            ],
+        }
+        metadata = {"image_attachments": [
+            {"filename": "desktop_review_sheet.jpg", "status": "uploaded"},
+            {"filename": "mobile_review_sheet.jpg", "status": "uploaded"},
+        ]}
+        self.assertEqual(validate_image_uploads(metadata, context)["errors"], [])
+        context["upload_images"][1]["covers"] = ["desktop_top.jpg", "desktop_mid.jpg"]
+        self.assertIn("review sheets do not cover all four source top/mid screenshots exactly",
+                      validate_image_uploads(metadata, context)["errors"])
 
     def test_batch_workflow_uses_proven_in_session_retry_behavior(self):
         workflow = Path(".github/workflows/chatgpt-visual-review-batch.yml").read_text(encoding="utf-8")
@@ -61,7 +90,7 @@ class VisualReviewRecoveryTests(unittest.TestCase):
             preparation_ok=True,
             process_exit_code=1,
             result={"status": "failed", "errors": [
-                "all expected desktop/mobile top and mid screenshots were not confirmed uploaded"
+                "both expected desktop/mobile review sheets were not confirmed uploaded"
             ]},
         )
         self.assertEqual(decision["status"], "retry-needed")

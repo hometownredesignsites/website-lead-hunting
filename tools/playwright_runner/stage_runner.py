@@ -22,15 +22,6 @@ class ResponseFollowupError(RuntimeError):
     """Raised when Duck.ai stays silent after a same-chat text follow-up."""
 
 
-def split_image_batches(image_files: list[Path] | None, max_per_batch: int = 3) -> list[list[Path]]:
-    """Group images to respect Duck.ai's three-image-per-message limit."""
-    files = list(image_files or [])
-    if max_per_batch < 1:
-        raise ValueError("max_per_batch must be positive")
-    return [files[index:index + max_per_batch]
-            for index in range(0, len(files), max_per_batch)]
-
-
 def run_stage_once(
     page,
     timeout_ms: int,
@@ -96,11 +87,11 @@ def run_stage_once(
         composer = find_chat_composer(page, timeout_ms=timeout_ms)
         if composer is None:
             raise RuntimeError("Could not find composer for stage execution.")
-        image_batches = split_image_batches(image_files)
-        metadata["image_batches"] = len(image_batches)
-        if image_batches:
+        files = list(image_files or [])
+        metadata["image_batches"] = 1 if files else 0
+        if files:
             metadata["image_attachments"] = attach_image_files(
-                page, image_batches[0], timeout_ms=timeout_ms
+                page, files, timeout_ms=timeout_ms
             )
             if len(metadata["image_attachments"]) == 1:
                 metadata["image_attachment"] = metadata["image_attachments"][0]
@@ -124,48 +115,6 @@ def run_stage_once(
             current_prompt=prompt_text,
         )
         settle_prompt_text = prompt_text
-        for batch_index, image_batch in enumerate(image_batches[1:], start=2):
-            batch_composer = find_chat_composer(page, timeout_ms=timeout_ms)
-            if batch_composer is None:
-                raise RuntimeError("Could not find composer for the remaining Duck.ai screenshots.")
-            metadata["image_attachments"].extend(
-                attach_image_files(page, image_batch, timeout_ms=timeout_ms)
-            )
-            followup_messages = assistant_turns(page)
-            followup_before_count = followup_messages.count()
-            followup_before_last_text = ""
-            if followup_before_count > 0:
-                try:
-                    followup_before_last_text = followup_messages.last.inner_text().strip()
-                except Exception:
-                    followup_before_last_text = ""
-            followup_prompt = (
-                f"The attached screenshot batch {batch_index} is additional evidence for this candidate. "
-                "Use it together with every screenshot already attached earlier in this chat and the "
-                "original candidate context and rubric. Now provide the final complete assessment for all "
-                "four views: desktop top, desktop mid, mobile top, and mobile mid. Follow the original "
-                "required output format, including explicit score, verdict, confidence, and observations "
-                "for each view. Do not assess only the newest screenshot batch."
-            )
-            metadata["image_batch_followup_used"] = True
-            metadata["image_batch_followup_count"] = batch_index - 1
-            send_prompt(page, batch_composer, followup_prompt)
-            settle_prompt_text = followup_prompt
-            page.wait_for_timeout(1200)
-            followup_messages = assistant_turns(page)
-            response_text = wait_for_valid_response(
-                page,
-                followup_messages,
-                before_count=followup_before_count,
-                before_last_text=followup_before_last_text,
-                wait_seconds=wait_seconds,
-                current_prompt=followup_prompt,
-            )
-            if not response_text:
-                raise ResponseFollowupError(
-                    "Duck.ai response remained empty after the additional screenshot batch."
-                )
-            assistant_messages = followup_messages
         followup_reason = None
         if not response_text:
             followup_reason = "empty_response"
@@ -190,15 +139,15 @@ def run_stage_once(
                     followup_before_last_text = ""
             if followup_reason == "empty_response":
                 followup_prompt = (
-                    "Your previous response was empty. Please retry the visual assessment using the four "
-                    "screenshots already attached and the candidate context in this chat. Follow the original "
+                    "Your previous response was empty. Please retry the visual assessment using the two "
+                    "labeled screenshot sheets already attached and the candidate context in this chat. Follow the original "
                     "rubric and output format. Include the explicit score, verdict, confidence, and labeled "
                     "observation sections. Return the concise plain-text scorecard without a preamble."
                 )
             else:
                 followup_prompt = (
                     "Your previous response did not include the required explicit scorecard. Please retry the "
-                    "visual assessment using the four screenshots already attached and the candidate context "
+                    "visual assessment using the two labeled screenshot sheets already attached and the candidate context "
                     "in this chat. Follow the original rubric and output format, include the labeled score, "
                     "verdict, confidence, and observation sections, and return only the concise plain-text "
                     "scorecard without a preamble."
