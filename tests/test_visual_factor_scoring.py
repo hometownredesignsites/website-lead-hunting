@@ -165,6 +165,13 @@ class VisualFactorScoringTests(unittest.TestCase):
         self.assertTrue(has_complete_response_scorecard(
             "Visual opportunity score: 55/100\n" + flattened
         ))
+        partial_json = {"visual_opportunity_score": 55, "factor_assessments": {
+            "hero_imagery": {"severity": "none", "evidence": "JSON value", "source": "screenshots"}
+        }}
+        merged = parse_factor_assessments(flattened, partial_json)
+        self.assertEqual(len(merged), 5)
+        self.assertEqual(merged["hero_imagery"]["evidence"], "JSON value")
+        self.assertTrue(has_complete_response_scorecard(flattened, partial_json))
 
     def test_benchmark_splits_by_label_and_reports_misclassification(self):
         rows = [
