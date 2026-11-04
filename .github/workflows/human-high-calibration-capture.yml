@@ -45,6 +45,7 @@ jobs:
           persist-credentials: false
           path: private-results-duckai
       - name: Capture matched screenshots and save private run ledgers
+        shell: bash
         env:
           CALIBRATION_RUN_KEY: ${{ inputs.calibration_run_key }}
         run: |
