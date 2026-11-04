@@ -35,6 +35,93 @@ def load_candidate(run_dir: Path, candidate_id: str) -> dict:
     raise ValueError(f"Candidate ID not found in {ledger}: {candidate_id}")
 
 
+def _compact(value, depth: int = 0):
+    if depth > 5:
+        return "[truncated]"
+    if isinstance(value, str):
+        return value[:350] + ("…" if len(value) > 350 else "")
+    if isinstance(value, dict):
+        omitted = {"html", "body", "stack", "traceback"}
+        return {str(key): _compact(item, depth + 1)
+                for key, item in list(value.items())[:24] if str(key).casefold() not in omitted}
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        return [_compact(item, depth + 1) for item in items[:10]] + (
+            [f"[{len(items) - 10} more items omitted]"] if len(items) > 10 else [])
+    return value
+
+
+def _limited(items, limit: int = 10) -> list:
+    return _compact(list(items or [])[:limit])
+
+
+def script_audit_summary(candidate: dict) -> dict:
+    """Keep deterministic audit evidence structured and separate from visual scoring."""
+    evidence = candidate.get("evidence") or {}
+    checks = candidate.get("site_checks") or evidence.get("site_checks") or {}
+    signals = candidate.get("signals") or {}
+    hero_media = candidate.get("hero_media") or signals.get("hero_media") or evidence.get("hero_media") or {}
+    http = checks.get("http_links_and_resources") or {}
+    images = checks.get("broken_images") or {}
+    forms = checks.get("contact_form_privacy") or {}
+    links = checks.get("broken_links_and_interactions") or {}
+    interactions = links.get("interactions") or {}
+    email = checks.get("contact_email_opportunity") or {}
+    summary = {
+        "status": checks.get("status", "not_run"),
+        "automated_priority": candidate.get("automated_priority"),
+        "website_opportunity_score": candidate.get("website_opportunity_score"),
+        "evidence_confidence": candidate.get("evidence_confidence"),
+        "hero_media": hero_media,
+        "signals": signals,
+        "opportunity_signals": candidate.get("opportunity_signals", {}),
+        "http_links_and_resources": {
+            "status": http.get("status", "not_run"),
+            "http_link_count": http.get("http_link_count", 0),
+            "insecure_resource_count": http.get("insecure_resource_count", 0),
+            "http_links": _limited(http.get("http_links")),
+            "insecure_resources": _limited(http.get("insecure_resources")),
+        },
+        "broken_images": {
+            "status": images.get("status", "not_run"),
+            "failed_image_count": images.get("failed_image_count", 0),
+            "lazy_loading": images.get("lazy_loading", {}),
+            "images": _limited(images.get("images")),
+            "request_failures": _limited(images.get("request_failures")),
+        },
+        "contact_form_privacy": {
+            "status": forms.get("status", "not_run"),
+            "form_detected": forms.get("form_detected"),
+            "form_count": forms.get("form_count"),
+            "privacy_policy_link_found": forms.get("privacy_policy_link_found"),
+            "privacy_policy_links": _limited(forms.get("privacy_policy_links")),
+        },
+        "contact_email_opportunity": {
+            "status": email.get("status", "not_run"),
+            "consumer_provider_domain_mismatch": email.get("consumer_provider_domain_mismatch"),
+            "opportunity_bonus_points": email.get("opportunity_bonus_points"),
+        },
+        "broken_links_and_interactions": {
+            "status": links.get("status", "not_run"),
+            "internal_links_checked": links.get("internal_links_checked", 0),
+            "broken_internal_links": _limited(links.get("broken_internal_links")),
+            "broken_same_page_anchors": _limited(links.get("broken_same_page_anchors")),
+            "interactions": {
+                "status": interactions.get("status", "not_run"),
+                "tested_count": interactions.get("tested_count", 0),
+                "findings": _limited(interactions.get("findings")),
+            },
+            "console_errors": _limited(links.get("console_errors")),
+            "request_failures": _limited(links.get("request_failures")),
+        },
+        "latest_blog_post": checks.get("latest_blog_post", {"status": "not_run"}),
+        "content_freshness": checks.get("content_freshness", {"status": "not_run"}),
+        "copyright_footer_signal": checks.get("copyright_footer_signal", {"status": "not_run"}),
+        "legacy_twitter_branding": checks.get("legacy_twitter_branding", {"status": "not_run"}),
+    }
+    return _compact(summary)
+
+
 def resolve_screenshot(record_path: str, run_dir: Path) -> Path | None:
     """Resolve only screenshots contained in the downloaded lead-hunt artifact."""
     normalized = record_path.replace("\\", "/").strip()
@@ -160,6 +247,7 @@ def main() -> int:
         "business_name": candidate.get("business_name"),
         "website_url": candidate.get("final_url") or candidate.get("canonical_url"),
         "site_title": candidate.get("site_title"),
+        "script_audit": script_audit_summary(candidate),
         "screenshots": [{"viewport": item["viewport"], "view": item["view"],
                          "filename": item["filename"],
                          "source_top_px": item["source_top_px"],
@@ -189,7 +277,7 @@ def main() -> int:
     context["upload_images"] = [{key: image[key] for key in ("viewport", "filename", "covers", "dimensions")}
                                 for image in upload_images]
     instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
-Use only the three supplied image files: desktop_top.jpg and desktop_mid.jpg are full-resolution viewport crops; mobile_review_sheet.jpg stacks the mobile TOP view first and MID view second, with a divider label. The top views show the start of each page; the mid views are viewport crops taken at 35% of the desktop and 60% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that screenshots cannot establish (such as current business status, licensing, technology, or whether forms work). If an image is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined evidence is insufficient.
+Use the three supplied image files for all visual judgments: desktop_top.jpg and desktop_mid.jpg are full-resolution viewport crops; mobile_review_sheet.jpg stacks the mobile TOP view first and MID view second, with a divider label. The top views show the start of each page; the mid views are viewport crops taken at 35% of the desktop and 60% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. A separate structured script audit is supplied in the prompt. Treat it as automated evidence, not as something you visually verified. Keep script findings out of the visual score, visual issue clusters, and screenshot observations. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that neither the screenshots nor the audit establish (such as current business status, licensing, or technology). If an image is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined visual evidence is insufficient.
 
 Score redesign opportunity with an integer from 0 to 100: higher means stronger visual evidence that a redesign could materially improve the site. Assess the material impact of the visible issues, not how many refinements you can suggest. A polished, credible site with strong relevant imagery, clear services/contact, and usable desktop/mobile layouts is pass when its remaining observations are preferences or minor polish.
 
@@ -232,7 +320,11 @@ Recommended redesign focus:
 Limitations:
 - <limitation, or "None noted">
 Use at least one concise bullet in every section. Do not add a preamble. Keep the explicit score and verdict near the top. The Python workflow will normalize this labeled response into JSON. Do not claim a check succeeded unless the screenshots show that evidence."""
-    prompt = "Assess all four source views in the three supplied image files under the rubric. The mobile_review_sheet.jpg contains separate labeled TOP and MID views. Match filenames to the viewport and view names in the supplied context. Use the candidate context only for identity; base the issue clusters on visible screenshot evidence across all four views. Return the concise labeled text format requested in the instructions."
+    prompt = ("Assess all four source views in the three supplied image files under the rubric. The mobile_review_sheet.jpg contains separate labeled TOP and MID views. "
+              "Match filenames to the viewport and view names in the supplied context. The script audit below is a separate evidence source: do not use it to raise or lower the screenshot-only visual score, and do not describe it as visually observed. "
+              "Return the concise labeled text format requested in the instructions.\n\n"
+              "STRUCTURED SCRIPT AUDIT (automated evidence; separate from visual scoring):\n"
+              + json.dumps(context["script_audit"], ensure_ascii=False, indent=2))
     (output_dir / "candidate-context.json").write_text(json.dumps(context, indent=2) + "\n", encoding="utf-8")
     (output_dir / "instructions.txt").write_text(instructions + "\n", encoding="utf-8")
     (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
