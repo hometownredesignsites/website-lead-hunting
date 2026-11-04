@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""Capture matched desktop/mobile views for the private human-high calibration cohort."""
-import argparse, csv, ipaddress, json, re, socket
-from datetime import datetime, timezone
-from pathlib import Path
-from urllib.parse import urlsplit
-from playwright.sync_api import sync_playwright
-
-def is_public(host):
-    try:
         ips = {ipaddress.ip_address(row[4][0]) for row in socket.getaddrinfo(host, None)}
         return bool(ips) and all(ip.is_global for ip in ips)
     except (OSError, ValueError):
@@ -42,7 +32,7 @@ def main():
     if not targets: raise ValueError("Calibration CSV is empty")
     rows=[]
     with sync_playwright() as p:
-        browser=p.chromium.launch(headless=True); context=browser.new_context(); page=context.new_page()
+        browser=p.chromium.launch(headless=True); context=browser.new_context(); page=context.new_page(); mobile_context=browser.new_context(viewport={"width":390,"height":844},device_scale_factor=1,is_mobile=True,has_touch=True); mobile_page=mobile_context.new_page()
         for n,target in enumerate(targets,1):
             url=(target.get("website") or "").strip(); parts=urlsplit(url); host=parts.hostname or ""
             record={"candidate_id":"", "business_name":(target.get("business") or "").strip(),
@@ -60,13 +50,13 @@ def main():
                 final_url=page.url; final_host=urlsplit(final_url).hostname or host
                 if not is_public(final_host): raise ValueError("Redirected host is not public")
                 record["site_title"]=page.title(); record["final_url"]=final_url; record["domain"]=final_host
-                record["screenshots"]["mobile"]=capture(page,final_url,mobile,390,844)
+                record["screenshots"]["mobile"]=capture(mobile_page,final_url,mobile,390,844)
                 record["site_check_status"]="loaded"
                 record["human_review"]={"decision":"high","basis":"private calibration cohort; label is not sent to visual model"}
             except Exception as exc:
                 record["capture_error"]=f"{type(exc).__name__}: {exc}"[:700]
             rows.append(record)
-        context.close(); browser.close()
+        mobile_context.close(); context.close(); browser.close()
     (run_dir/"CANDIDATE_LEDGER.jsonl").write_text("".join(json.dumps(row,ensure_ascii=False)+chr(10) for row in rows),encoding="utf-8")
     manifest={"run_key":run_dir.name,"run_type":"human_high_calibration_capture",
               "created_at":datetime.now(timezone.utc).isoformat(timespec="seconds"),
