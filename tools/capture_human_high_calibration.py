@@ -46,6 +46,18 @@ def candidate_id(index: int, host: str) -> str:
 def capture(page, url: str, path: Path, width: int, height: int) -> dict:
     page.set_viewport_size({"width": width, "height": height})
     response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    if width <= 500:
+        # Legacy sites without a viewport declaration otherwise render at 980px wide.
+        page.evaluate("""() => {
+          let viewport = document.querySelector('meta[name="viewport"]');
+          if (!viewport) {
+            viewport = document.createElement('meta');
+            viewport.name = 'viewport';
+            document.head.appendChild(viewport);
+          }
+          viewport.content = 'width=device-width, initial-scale=1';
+        }""")
+        page.wait_for_timeout(250)
     page.wait_for_timeout(900)
     try:
         page.evaluate("""async () => {
