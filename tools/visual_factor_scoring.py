@@ -20,20 +20,30 @@ FACTOR_SOURCES = {
 
 
 def parse_factor_assessments(response_text: str, review: dict) -> dict:
-    """Parse fixed factor lines from the reliable labeled-text response format."""
+    """Parse fixed factor assessments from labeled text or JSON review data."""
     factors = review.get("factor_assessments") or review.get("factors")
     if isinstance(factors, dict):
         return factors
     result = {}
-    for key, label in FACTORS.items():
-        match = re.search(
-            rf"^\s*{re.escape(label)}\s*:\s*(none|minor|moderate|severe|not[_ -]assessable)\s*(?:—|--|-)\s*(.*?)\s*$",
-            response_text,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
-        if match:
-            severity = match.group(1).casefold().replace(" ", "_").replace("-", "_")
-            evidence = re.sub(r"\s*;?\s*source=(?:screenshots|script_audit|screenshots_and_script_audit)\s*$", "", match.group(2).strip(), flags=re.I)
+    label_to_key = {label.casefold(): key for key, label in FACTORS.items()}
+    labels = "|".join(re.escape(label) for label in FACTORS.values())
+    pattern = re.compile(
+        rf"(?P<label>{labels})\s*:\s*(?P<severity>none|minor|moderate|severe|not[_ -]assessable)\s*(?:—|--|-|�)\s*",
+        flags=re.IGNORECASE,
+    )
+    matches = list(pattern.finditer(response_text))
+    for index, match in enumerate(matches):
+        key = label_to_key[match.group("label").casefold()]
+        evidence_end = matches[index + 1].start() if index + 1 < len(matches) else len(response_text)
+        evidence = response_text[match.end():evidence_end].strip()
+        evidence = re.sub(
+            r"\s*;?\s*source=(?:screenshots|script_audit|screenshots_and_script_audit)\s*$",
+            "", evidence, flags=re.I,
+        ).strip()
+        # Some model UIs flatten the entire five-factor answer into a single paragraph.
+        # Ignore the section heading and unrelated content before the first factor.
+        if evidence:
+            severity = match.group("severity").casefold().replace(" ", "_").replace("-", "_")
             result[key] = {"severity": severity, "evidence": evidence, "source": FACTOR_SOURCES[key]}
     return result
 

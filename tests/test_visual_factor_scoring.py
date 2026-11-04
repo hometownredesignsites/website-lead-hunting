@@ -148,6 +148,24 @@ class VisualFactorScoringTests(unittest.TestCase):
         ))
         self.assertTrue(has_complete_response_scorecard(complete))
 
+    def test_flattened_factor_assessments_are_parsed_from_one_paragraph(self):
+        flattened = (
+            "Limitations: no script-audit evidence. Factor assessments: "
+            "Hero imagery: minor — text-only hero; source=screenshots "
+            "Readability: moderate — small dense text; source=screenshots "
+            "Layout and mobile use: moderate — tightly packed mobile layout; source=screenshots "
+            "Broken images: not_assessable — audit not provided; source=script_audit "
+            "Interactions: not_assessable — audit not provided; source=script_audit"
+        )
+        factors = parse_factor_assessments(flattened, {})
+        self.assertEqual(set(factors), {
+            "hero_imagery", "readability", "layout_mobile", "broken_images", "interactions"
+        })
+        self.assertEqual(factors["readability"]["severity"], "moderate")
+        self.assertTrue(has_complete_response_scorecard(
+            "Visual opportunity score: 55/100\n" + flattened
+        ))
+
     def test_benchmark_splits_by_label_and_reports_misclassification(self):
         rows = [
             {"website": f"site-{i}.example", "decision": "High", "chatgpt_status": "passed",
