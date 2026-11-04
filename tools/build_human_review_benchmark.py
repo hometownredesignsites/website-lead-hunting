@@ -52,20 +52,28 @@ def review_sort_key(review: dict) -> tuple[str, int]:
 
 def assessment_fields(candidate: dict | None, provider: str) -> dict:
     prefix = f"{provider}_"
+    empty = {prefix + key: "" for key in (
+        "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
+    )}
     if not candidate:
-        return {
-            prefix + "status": "not_assessed",
-            **{prefix + key: "" for key in (
-                "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
-            )},
-        }
+        return {prefix + "status": "not_assessed", prefix + "assessment_version": "", **empty}
 
     reviews = [review for review in review_candidates(candidate, provider)]
-    valid = [review for review in reviews if review.get("status") == "passed"
-             and isinstance(review.get("visual_opportunity_score"), (int, float))]
-    chosen = max(valid or reviews, key=review_sort_key, default={})
+    factor_reviews = [review for review in reviews
+                      if (review.get("score_calibration") or {}).get("version") == "fixed-factors-v1"]
+    if not factor_reviews:
+        return {
+            prefix + "status": "not_assessed",
+            prefix + "assessment_version": "legacy_excluded" if reviews else "",
+            **empty,
+        }
+    chosen = max(factor_reviews, key=review_sort_key)
+    status = chosen.get("status", "not_assessed")
+    if chosen.get("visual_verdict") == "uncertain" or chosen.get("visual_opportunity_score") is None:
+        status = "uncertain" if status == "passed" else status
     return {
-        prefix + "status": chosen.get("status", "not_assessed"),
+        prefix + "status": status,
+        prefix + "assessment_version": "fixed-factors-v1",
         prefix + "score": chosen.get("visual_opportunity_score", ""),
         prefix + "verdict": chosen.get("visual_verdict", ""),
         prefix + "model_score": chosen.get("model_reported_visual_opportunity_score", ""),
@@ -187,9 +195,9 @@ def main() -> int:
         for provider in PROVIDERS:
             if match:
                 reviews = match[provider]
-                valid = [review for review in reviews if review.get("status") == "passed"
-                         and isinstance(review.get("visual_opportunity_score"), (int, float))]
-                latest = max(valid or reviews, key=review_sort_key, default={})
+                factor_reviews = [review for review in reviews
+                                  if (review.get("score_calibration") or {}).get("version") == "fixed-factors-v1"]
+                latest = max(factor_reviews or reviews, key=review_sort_key, default={})
                 provider_candidate = {f"{provider}_visual_review": latest}
                 output.update(assessment_fields(provider_candidate, provider))
             else:
@@ -201,7 +209,7 @@ def main() -> int:
     fields = [*LABEL_FIELDS, "match_status", "benchmark_split", "candidate_ids"]
     for provider in PROVIDERS:
         fields.extend(f"{provider}_{field}" for field in (
-            "status", "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
+            "status", "assessment_version", "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
         ))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8-sig", newline="") as handle:
