@@ -139,6 +139,8 @@ The current public branch no longer stores run records or configuration; they ar
 
 The current review and checkpoint path was verified by [GitHub Actions visual review run #7](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41565515143): one candidate received a validated scorecard, the merge job committed it, and the job summary reported candidate outcome counts. Screenshots remain only in the short-lived Actions artifact.
 
+Visual scores use an evidence-cluster calibration shared with the Duck.ai branch: `min(100, 24 + 13 × moderate_issues + 26 × severe_issues)`. Repeated descriptions of the same root issue and minor polish do not add points. The score band determines the verdict: pass 0–49, medium 50–74, high 75–100. High therefore requires at least two severe clusters, four moderate clusters, or one severe plus two moderate clusters. The scorecard records the visible evidence and confidence; this calibration improves consistency but does not guarantee identical model judgments.
+
 ## Recent live validation
 
 - **Automatic visual candidate selection:** [run 41575293012](https://github.com/hometownredesignsites/website-lead-hunting/actions/runs/41575293012) left the candidate-ID input blank. The selector chose one eligible candidate from the committed ledger, the isolated candidate job returned a validated scorecard (57, medium, high confidence), and the merge committed the score to the test branch. This proves the auto-select-to-score path for one candidate; it is not a production campaign or a reliability-rate estimate.
