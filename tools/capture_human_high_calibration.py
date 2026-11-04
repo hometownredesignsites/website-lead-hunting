@@ -27,7 +27,7 @@ def capture(page, url, output, width, height):
     except Exception:
         page.screenshot(path=str(output), full_page=False, animations="disabled", timeout=15000)
         mode = "viewport_fallback"
-    return {"status":"saved", "path":output.as_posix(), "mode":mode,
+    return {"status":"saved", "path":output.relative_to(Path.cwd()).as_posix(), "mode":mode,
             "http_status":response.status if response else None,
             "viewport":{"width":width,"height":height}}
 
