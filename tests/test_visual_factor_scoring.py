@@ -1,10 +1,16 @@
+import contextlib
+import io
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from visual_factor_scoring import enforce_script_audit_evidence, normalize_and_score, parse_factor_assessments
 from build_human_review_benchmark import assign_stratified_split, summarize
+from validate_chatgpt_visual_review import main as validate_chatgpt_review
 
 
 class VisualFactorScoringTests(unittest.TestCase):
@@ -57,6 +63,69 @@ class VisualFactorScoringTests(unittest.TestCase):
         result = normalize_and_score(enforce_script_audit_evidence(factors, audit))
         self.assertEqual(result["verdict"], "uncertain")
         self.assertEqual(set(result["uncertain_factors"]), {"broken_images", "interactions"})
+
+    def test_chatgpt_validator_returns_the_fixed_factor_score(self):
+        self._assert_validator_uses_factor_score(validate_chatgpt_review, duckai=False)
+
+    def _assert_validator_uses_factor_score(self, validator, duckai):
+        screenshots = [
+            {"filename": name}
+            for name in ("desktop_top.jpg", "desktop_mid.jpg", "mobile_top.jpg", "mobile_mid.jpg")
+        ]
+        factors = self.factors()
+        factors["hero_imagery"]["severity"] = "minor"
+        review = {
+            "candidate_id": "candidate-1", "website_url": "https://example.com",
+            "visual_verdict": "pass", "visual_opportunity_score": 49,
+            "confidence": "high", "factor_assessments": factors,
+            "desktop_top_observations": ["Desktop top checked"],
+            "desktop_mid_observations": ["Desktop middle checked"],
+            "mobile_top_observations": ["Mobile top checked"],
+            "mobile_mid_observations": ["Mobile middle checked"],
+            "desktop_observations": ["Desktop checked"],
+            "mobile_observations": ["Mobile checked"],
+            "major_issues": [], "moderate_issue_clusters": [], "severe_issue_clusters": [],
+            "positive_signals": [], "recommended_redesign_focus": [], "limitations": [],
+        }
+        context = {
+            "candidate_id": "candidate-1", "website_url": "https://example.com",
+            "screenshots": screenshots,
+            "script_audit": {
+                "broken_images": {"status": "clear"},
+                "broken_links_and_interactions": {"status": "clear"},
+            },
+        }
+        uploaded = [{"filename": item["filename"], "status": "uploaded"} for item in screenshots]
+        if duckai:
+            context["upload_images"] = [
+                {"filename": "desktop_top.jpg", "covers": ["desktop_top.jpg", "desktop_mid.jpg"]},
+                {"filename": "mobile_top.jpg", "covers": ["mobile_top.jpg", "mobile_mid.jpg"]},
+                {"filename": "desktop_mid.jpg", "covers": []},
+            ]
+            # Duck.ai uploads three composites, so its attachment names and coverage match that contract.
+            context["upload_images"] = context["upload_images"][:2] + [
+                {"filename": "desktop_mid.jpg", "covers": ["mobile_mid.jpg"]}
+            ]
+            uploaded = [{"filename": item["filename"], "status": "uploaded"} for item in context["upload_images"]]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            response_path = root / "response.json"
+            metadata_path = root / "metadata.json"
+            context_path = root / "context.json"
+            output_path = root / "result.json"
+            response_path.write_text(json.dumps(review), encoding="utf-8")
+            metadata_path.write_text(json.dumps({"image_attachments": uploaded}), encoding="utf-8")
+            context_path.write_text(json.dumps(context), encoding="utf-8")
+            args = ["validator", "--response", str(response_path), "--metadata", str(metadata_path),
+                    "--context", str(context_path), "--output", str(output_path)]
+            with patch("sys.argv", args), contextlib.redirect_stdout(io.StringIO()):
+                result_code = validator()
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(result_code, 0)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["review"]["visual_opportunity_score"], 5)
+        self.assertEqual(result["review"]["visual_verdict"], "pass")
 
     def test_parse_fixed_labeled_factor_lines(self):
         text = "Hero imagery: moderate — no meaningful hero image; source=screenshots\n" \
