@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 import json
 import re
@@ -11,7 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
+
+try:
+    from .site_audit import PageObserver, load_lazy_images, run_site_checks
+except ImportError:
+    from site_audit import PageObserver, load_lazy_images, run_site_checks
 
 
 def now_iso() -> str:
@@ -43,12 +49,12 @@ def candidate_id(index: int, host: str) -> str:
     return f"cal-high-{index:03d}-{slug}"
 
 
-def capture(page, url: str, path: Path, width: int, height: int) -> dict:
-    page.set_viewport_size({"width": width, "height": height})
-    response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(900)
+async def capture(page, url: str, path: Path, width: int, height: int) -> dict:
+    await page.set_viewport_size({"width": width, "height": height})
+    response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    await page.wait_for_timeout(900)
     try:
-        page.evaluate("""async () => {
+        await page.evaluate("""async () => {
           const images = Array.from(document.images);
           for (const image of images) image.loading = 'eager';
           await Promise.all(images.map(image => image.decode().catch(() => {})));
@@ -60,10 +66,10 @@ def capture(page, url: str, path: Path, width: int, height: int) -> dict:
     except Exception:
         pass
     try:
-        page.screenshot(path=str(path), full_page=True, animations="disabled", timeout=30000)
+        await page.screenshot(path=str(path), full_page=True, animations="disabled", timeout=30000)
         mode = "full_page"
     except Exception:
-        page.screenshot(path=str(path), full_page=False, animations="disabled", timeout=15000)
+        await page.screenshot(path=str(path), full_page=False, animations="disabled", timeout=15000)
         mode = "viewport_fallback"
     if width <= 500:
         from PIL import Image
@@ -75,11 +81,7 @@ def capture(page, url: str, path: Path, width: int, height: int) -> dict:
             "final_url": page.url, "viewport": {"width": width, "height": height}}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--targets-csv", type=Path, required=True)
-    parser.add_argument("--run-dir", type=Path, required=True)
-    args = parser.parse_args()
+async def capture_run(args) -> int:
     run_dir = args.run_dir.resolve()
     screenshots_dir = run_dir / "screenshots"
     screenshots_dir.mkdir(parents=True, exist_ok=True)
@@ -87,27 +89,9 @@ def main() -> int:
     if not targets:
         raise ValueError("Calibration target CSV has no rows")
     candidates = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        desktop_context = browser.new_context(ignore_https_errors=False, viewport={"width": 1440, "height": 1000})
-        mobile_context = browser.new_context(ignore_https_errors=False, viewport={"width": 390, "height": 844},
-                                             device_scale_factor=1, is_mobile=True, has_touch=True)
-        desktop_page = desktop_context.new_page()
-        mobile_page = mobile_context.new_page()
-        mobile_page.add_init_script("""(() => {
-          const ensureViewport = () => {
-            if (!document.head) return;
-            let viewport = document.querySelector('meta[name="viewport"]');
-            if (!viewport) {
-              viewport = document.createElement('meta');
-              viewport.name = 'viewport';
-              document.head.appendChild(viewport);
-            }
-            viewport.content = 'width=device-width, initial-scale=1';
-          };
-          new MutationObserver(ensureViewport).observe(document, {childList: true, subtree: true});
-          ensureViewport();
-        })();""")
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        public_host_cache: dict[str, bool] = {}
         for index, target in enumerate(targets, 1):
             business = (target.get("business") or "").strip()
             location = (target.get("location") or "").strip()
@@ -123,30 +107,63 @@ def main() -> int:
                       "configured_location": location, "region": "Colorado",
                       "domain": host, "canonical_url": url, "final_url": url,
                       "site_title": "", "site_check_status": "error",
-                      "screenshots": {}}
+                      "screenshots": {}, "site_checks": {"status": "not_run"}}
+            desktop_context = await browser.new_context(ignore_https_errors=False,
+                viewport={"width": 1440, "height": 1000})
+            mobile_context = await browser.new_context(ignore_https_errors=False,
+                viewport={"width": 390, "height": 844}, device_scale_factor=1,
+                is_mobile=True, has_touch=True)
+            mobile_page = await mobile_context.new_page()
+            await mobile_page.add_init_script("""(() => {
+          const ensureViewport = () => {
+            if (!document.head) return;
+            let viewport = document.querySelector('meta[name="viewport"]');
+            if (!viewport) {
+              viewport = document.createElement('meta');
+              viewport.name = 'viewport';
+              document.head.appendChild(viewport);
+            }
+            viewport.content = 'width=device-width, initial-scale=1';
+          };
+          new MutationObserver(ensureViewport).observe(document, {childList: true, subtree: true});
+          ensureViewport();
+        })();""")
+            desktop_page = await desktop_context.new_page()
+            observer = PageObserver(desktop_page)
             try:
-                record["screenshots"]["desktop"] = capture(desktop_page, url, desktop_path, 1440, 1000)
-                title = desktop_page.title()
+                record["screenshots"]["desktop"] = await capture(desktop_page, url, desktop_path, 1440, 1000)
+                title = await desktop_page.title()
                 final_url = desktop_page.url
                 final_host = (urlsplit(final_url).hostname or "").lower()
-                if final_host and not public_host(final_host):
+                if final_host and final_host not in public_host_cache:
+                    public_host_cache[final_host] = await asyncio.to_thread(public_host, final_host)
+                if final_host and not public_host_cache[final_host]:
                     raise ValueError("Final website host is not publicly resolvable")
-                record["screenshots"]["mobile"] = capture(mobile_page, final_url, mobile_path, 390, 844)
+                image_loading = await load_lazy_images(desktop_page)
+                try:
+                    record["site_checks"] = await run_site_checks(
+                        desktop_page, final_url, observer, public_host_cache, public_host, image_loading)
+                except Exception as audit_error:
+                    record["site_checks"] = {"status": "unknown",
+                        "error": f"{type(audit_error).__name__}: {audit_error}"[:500]}
+                record["screenshots"]["mobile"] = await capture(mobile_page, final_url, mobile_path, 390, 844)
                 record.update({"site_check_status": "loaded", "site_title": title,
                                "final_url": final_url, "domain": final_host or host,
                                "human_review": {"decision": "high", "basis": "provided human review cohort"}})
             except Exception as exc:
                 record["capture_error"] = f"{type(exc).__name__}: {exc}"[:700]
+            finally:
+                observer.close()
+                await desktop_context.close()
+                await mobile_context.close()
             candidates.append(record)
-        desktop_context.close()
-        mobile_context.close()
-        browser.close()
+        await browser.close()
     ledger_path = run_dir / "CANDIDATE_LEDGER.jsonl"
     ledger_path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in candidates),
                            encoding="utf-8")
     manifest = {"run_key": run_dir.name, "run_type": "human_high_calibration_capture",
                 "created_at": now_iso(), "target_count": len(candidates),
-                "capture_method": "Playwright Chromium; one desktop and one mobile full-page screenshot per site",
+                "capture_method": "Playwright Chromium; per-site desktop and mobile full-page screenshots plus bounded desktop script audit",
                 "human_labels_are_not_sent_to_visual_model": True}
     (run_dir / "RUN_MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"run_key": run_dir.name, "candidate_count": len(candidates),
@@ -154,6 +171,13 @@ def main() -> int:
                       "capture_failed": sum(row["site_check_status"] != "loaded" for row in candidates),
                       "candidate_ids": [row["candidate_id"] for row in candidates]}, indent=2))
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--targets-csv", type=Path, required=True)
+    parser.add_argument("--run-dir", type=Path, required=True)
+    return asyncio.run(capture_run(parser.parse_args()))
 
 
 if __name__ == "__main__":
