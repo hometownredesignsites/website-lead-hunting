@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from visual_factor_scoring import (enforce_script_audit_evidence, has_complete_response_scorecard,
+from visual_factor_scoring import (ASSESSMENT_VERSION, enforce_script_audit_evidence, has_complete_response_scorecard,
                                    normalize_and_score, parse_factor_assessments)
 from build_human_review_benchmark import assessment_fields, assign_stratified_split, summarize
 from validate_chatgpt_visual_review import main as validate_chatgpt_review
@@ -193,11 +193,11 @@ class VisualFactorScoringTests(unittest.TestCase):
         self.assertEqual(assessment_fields(legacy, "chatgpt")["chatgpt_assessment_version"], "legacy_excluded")
         factor = {"chatgpt_visual_review": {
             "status": "passed", "visual_opportunity_score": None, "visual_verdict": "uncertain",
-            "score_calibration": {"version": "fixed-factors-v1"}, "factor_assessments": {"hero_imagery": {"severity": "minor"}},
+            "score_calibration": {"version": ASSESSMENT_VERSION}, "factor_assessments": {"hero_imagery": {"severity": "minor"}},
         }}
         fields = assessment_fields(factor, "chatgpt")
         self.assertEqual(fields["chatgpt_status"], "uncertain")
-        self.assertEqual(fields["chatgpt_assessment_version"], "fixed-factors-v1")
+        self.assertEqual(fields["chatgpt_assessment_version"], ASSESSMENT_VERSION)
         self.assertEqual(fields["chatgpt_score"], None)
 
 

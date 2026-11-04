@@ -2,7 +2,7 @@
 
 Use the private human-review labels to compare the system's current assessments against the decisions made during interactive review. The `decision` column is the label of record; `markdown_decision` is not substituted when the two disagree. Keep the input labels, notes, and generated benchmark CSV in the private operations repository.
 
-The benchmark utility matches rows by normalized website host and joins the newest `fixed-factors-v1` scorecard from each provider ledger. Legacy issue-cluster scores are excluded so they are not compared with the new factor-based system. A candidate can match by host while its provider assessment remains `not_assessed` until it has a current-version factor scorecard. A validated assessment with missing required evidence is reported as `uncertain`, not as a numeric score.
+The benchmark utility matches rows by normalized website host and joins the newest `fixed-factors-v2` scorecard from each provider ledger. Legacy issue-cluster scores and v1 scorecards are excluded so they are not compared with the current rubric. A candidate can match by host while its provider assessment remains `not_assessed` until it has a current-version factor scorecard. A validated assessment with missing required evidence is reported as `uncertain`, not as a numeric score.
 
 ```powershell
 python tools/build_human_review_benchmark.py `
@@ -16,4 +16,4 @@ The output keeps human decisions and notes alongside provider status, assessment
 
 Each CSV row gets a stable, stratified split: one row of every five within each human-decision class is assigned to `holdout`; the others are `tuning`. Use tuning rows to adjust factor definitions and scoring. Keep holdout rows untouched until evaluating a proposed change. The split is reproducible from the normalized website host, so rebuilding the benchmark preserves the assignment.
 
-The supplied human-review CSV contains 21 High and 42 Medium labels, with no Pass examples. Previous reports included legacy scores; those scores are not valid new-system predictions. Fresh factor-based assessments must be collected for all labeled High and Medium sites, and human-reviewed Pass examples added before tuning decision thresholds or measuring false positives. Keep holdout rows untouched until a proposed scoring change is ready for evaluation. Keep benchmark outputs private because they contain business-level review decisions and notes.
+The supplied human-review CSV contains 21 High and 42 Medium labels, with no Pass examples. Previous reports included legacy scores; those scores are not valid new-system predictions. Fresh v2 factor-based assessments must be collected for all labeled High and Medium sites, and human-reviewed Pass examples added before tuning decision thresholds or measuring false positives. Keep holdout rows untouched until a proposed scoring change is ready for evaluation. Keep benchmark outputs private because they contain business-level review decisions and notes.

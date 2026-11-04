@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from visual_factor_scoring import ASSESSMENT_VERSION
+
 
 PROVIDERS = ("chatgpt", "duckai")
 LABEL_FIELDS = (
@@ -60,7 +62,7 @@ def assessment_fields(candidate: dict | None, provider: str) -> dict:
 
     reviews = [review for review in review_candidates(candidate, provider)]
     factor_reviews = [review for review in reviews
-                      if (review.get("score_calibration") or {}).get("version") == "fixed-factors-v1"]
+                      if (review.get("score_calibration") or {}).get("version") == ASSESSMENT_VERSION]
     if not factor_reviews:
         return {
             prefix + "status": "not_assessed",
@@ -73,7 +75,7 @@ def assessment_fields(candidate: dict | None, provider: str) -> dict:
         status = "uncertain" if status == "passed" else status
     return {
         prefix + "status": status,
-        prefix + "assessment_version": "fixed-factors-v1",
+        prefix + "assessment_version": ASSESSMENT_VERSION,
         prefix + "score": chosen.get("visual_opportunity_score", ""),
         prefix + "verdict": chosen.get("visual_verdict", ""),
         prefix + "model_score": chosen.get("model_reported_visual_opportunity_score", ""),
@@ -196,7 +198,7 @@ def main() -> int:
             if match:
                 reviews = match[provider]
                 factor_reviews = [review for review in reviews
-                                  if (review.get("score_calibration") or {}).get("version") == "fixed-factors-v1"]
+                                  if (review.get("score_calibration") or {}).get("version") == ASSESSMENT_VERSION]
                 latest = max(factor_reviews or reviews, key=review_sort_key, default={})
                 provider_candidate = {f"{provider}_visual_review": latest}
                 output.update(assessment_fields(provider_candidate, provider))

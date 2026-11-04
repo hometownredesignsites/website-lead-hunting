@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 
 from playwright_runner.prompt_contracts import extract_json_payload
-from visual_factor_scoring import enforce_script_audit_evidence, normalize_and_score, parse_factor_assessments
+from visual_factor_scoring import (ASSESSMENT_VERSION, enforce_script_audit_evidence,
+                                   normalize_and_score, parse_factor_assessments)
 
 
 SECTION_KEYS = {
@@ -147,11 +148,6 @@ def main() -> int:
         audit = context.get("script_audit") or {}
         enforce_script_audit_evidence(factors, audit)
         scorecard = normalize_and_score(factors)
-        if model_verdict == "uncertain" and not scorecard["errors"]:
-            scorecard["score"] = None
-            scorecard["verdict"] = "uncertain"
-            if not scorecard["uncertain_factors"]:
-                scorecard["uncertain_factors"] = ["model_assessment_uncertain"]
         review["factor_assessments"] = scorecard["factors"]
         errors.extend(scorecard["errors"])
         review["model_reported_visual_opportunity_score"] = model_score
@@ -159,7 +155,7 @@ def main() -> int:
         review["visual_opportunity_score"] = scorecard["score"]
         review["visual_verdict"] = scorecard["verdict"]
         review["score_calibration"] = {
-            "version": "fixed-factors-v1",
+            "version": ASSESSMENT_VERSION,
             "method": "sum of five fixed factor severities: none=0, minor=5, moderate=25, severe=50; capped at 100",
             "factor_points": {key: {"severity": value["severity"], "points": {"none": 0, "minor": 5, "moderate": 25, "severe": 50}.get(value["severity"])} for key, value in scorecard["factors"].items()},
             "uncertain_factors": scorecard["uncertain_factors"],

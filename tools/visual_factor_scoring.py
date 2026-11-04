@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 
 
+ASSESSMENT_VERSION = "fixed-factors-v2"
+
 FACTORS = {
     "hero_imagery": "Hero imagery",
     "readability": "Readability",
