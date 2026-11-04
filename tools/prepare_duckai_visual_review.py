@@ -166,13 +166,19 @@ def main() -> int:
                          "scrollable_height_px": item["scrollable_height_px"]}
                         for item in images],
     }
-    upload_images = [make_review_sheet(viewport,
-                      [item for item in images if item["viewport"] == viewport], output_dir)
-                     for viewport in ("desktop", "mobile")]
+    # Upload each viewport crop independently so Duck.ai can inspect the same
+    # full-resolution evidence as the ChatGPT review workflow.
+    upload_images = [{
+        "viewport": item["viewport"],
+        "view": item["view"],
+        "filename": item["filename"],
+        "covers": [item["filename"]],
+        "dimensions": item["uploaded_dimensions"],
+    } for item in images]
     context["upload_images"] = [{key: image[key] for key in ("viewport", "filename", "covers", "dimensions")}
                                 for image in upload_images]
     instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
-Use only the two supplied labeled contact sheets: desktop_review_sheet.jpg and mobile_review_sheet.jpg. Each sheet stacks its viewport's TOP view first and MID view second; the dark divider labels each panel. The top views show the start of each page; the mid views are viewport crops taken at 35% of the desktop and 60% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that screenshots cannot establish (such as current business status, licensing, technology, or whether forms work). If a panel is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined evidence is insufficient.
+Use only the four supplied full-resolution screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page; the mid views are viewport crops taken at 35% of the desktop and 60% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. Do not browse the site or treat the supplied title/URL as visual evidence. Do not infer facts that screenshots cannot establish (such as current business status, licensing, technology, or whether forms work). If an image is missing, obstructed, too small, or not interpretable, lower confidence and state the limitation; use an uncertain verdict and null score only when the combined evidence is insufficient.
 
 Score redesign opportunity with an integer from 0 to 100: higher means stronger visual evidence that a redesign could materially improve the site. Assess the material impact of the visible issues, not how many refinements you can suggest. A polished, credible site with strong relevant imagery, clear services/contact, and usable desktop/mobile layouts is pass when its remaining observations are preferences or minor polish.
 
@@ -182,20 +188,22 @@ Use medium (50-74) only when the screenshots show either one severe, clearly dem
 
 Do not infer missing or hidden content, poor usability, or a broken section from a dark or sparse-looking area alone. If the screenshot does not clearly show content obscured, unreadable text, an obstructed control, or another concrete user-facing problem, describe the ambiguous appearance as a limitation and do not count it toward the score.
 
-Use high (75-100) for one severe flaw or multiple major flaws that materially harm trust, readability, navigation, mobile usability, or the ability to request service. A dated look and mobile failure do not both need to be present for high. Use uncertain with a null score when the combined evidence is insufficient. Score bands: high=75-100, medium=50-74, pass=0-49.
+Use high (75-100) only when the evidence-cluster calculation reaches 75; examples are two severe clusters, four moderate clusters, or one severe plus two moderate clusters. Use uncertain with a null score when the combined evidence is insufficient. Score bands: high=75-100, medium=50-74, pass=0-49.
+
+Calibrate the number mechanically from independently evidenced issue clusters. First count moderate clusters (M) and severe clusters (S); do not count cosmetic refinements, repeat observations of the same root problem, speculative effects, or the same text-size complaint across several screenshots more than once. Use score = min(100, 24 + 13*M + 26*S). This makes no material issue 24, one moderate 37, two moderate 50, one severe 50, three moderate 63, and two severe 76. Verdict must follow the score bands above. To count a moderate cluster, name a visible user-facing consequence; to count severe, show an obvious obstruction or substantial loss of readability, navigation, trust, or ability to request service. A dark panel, compact appearance, or small-looking text on a reduced image does not qualify by itself. If legibility is uncertain at the supplied image resolution, call it out as a limitation and do not score it as a material issue.
 
 Return a concise plain-text assessment, not JSON. Use this exact labeled format so the result can be converted reliably:
 Visual opportunity score: <integer 0-100>/100, or "uncertain (no score)" when the visual evidence is insufficient
 Verdict: <high|medium|pass|uncertain>
 Confidence: <low|medium|high>
 Desktop top observations:
-- <one concise observation tied to the TOP panel of desktop_review_sheet.jpg>
+- <one concise observation tied to desktop_top.jpg>
 Desktop mid observations:
-- <one concise observation tied to the MID panel of desktop_review_sheet.jpg>
+- <one concise observation tied to desktop_mid.jpg>
 Mobile top observations:
-- <one concise observation tied to the TOP panel of mobile_review_sheet.jpg>
+- <one concise observation tied to mobile_top.jpg>
 Mobile mid observations:
-- <one concise observation tied to the MID panel of mobile_review_sheet.jpg>
+- <one concise observation tied to mobile_mid.jpg>
 Desktop observations:
 - <summary across both desktop views>
 Mobile observations:
@@ -209,7 +217,7 @@ Recommended redesign focus:
 Limitations:
 - <limitation, or "None noted">
 Use at least one concise bullet in every section. Do not add a preamble. Keep the explicit score and verdict near the top. The Python workflow will normalize this labeled response into JSON. Do not claim a check succeeded unless the screenshots show that evidence."""
-    prompt = "Assess both supplied labeled contact sheets and score the visual redesign opportunity under the rubric. Each contains top and mid views for its viewport. Use the candidate context only for identity; base the score on visible screenshot evidence across all four panels. Return the concise labeled text format requested in the instructions."
+    prompt = "Assess all four supplied screenshots and score the visual redesign opportunity under the rubric. Match filenames to the viewport and view names in the supplied context. Use the candidate context only for identity; base the score on visible screenshot evidence across the top and mid-page views. Return the concise labeled text format requested in the instructions."
     (output_dir / "candidate-context.json").write_text(json.dumps(context, indent=2) + "\n", encoding="utf-8")
     (output_dir / "instructions.txt").write_text(instructions + "\n", encoding="utf-8")
     (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")

@@ -101,12 +101,12 @@ def validate_image_uploads(metadata: dict, context: dict) -> dict:
     covered_names = set(covered)
     errors = []
     if (uploaded_names != expected_names or len(attachment_records) != len(expected_names)
-            or len(expected_names) != 2):
-        errors.append("both expected desktop/mobile review sheets were not confirmed uploaded")
+            or len(expected_names) != 4):
+        errors.append("all four expected full-resolution viewport screenshots were not confirmed uploaded")
     if len(source_names) != 4:
         errors.append("candidate context must list exactly four source top/mid desktop/mobile screenshots")
     if covered_names != source_names or len(covered) != 4:
-        errors.append("review sheets do not cover all four source top/mid screenshots exactly")
+        errors.append("uploaded images do not cover all four source top/mid screenshots exactly")
     return {
         "errors": errors,
         "expected_uploaded_images": sorted(expected_names),
