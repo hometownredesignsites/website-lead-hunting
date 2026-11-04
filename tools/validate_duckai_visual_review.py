@@ -202,7 +202,7 @@ def main() -> int:
             "uncertain_factors": scorecard["uncertain_factors"],
         }
         review["raw_model_response"] = response_text
-        verdict, score = calibrated_verdict, calibrated_score
+        verdict, score = scorecard["verdict"], scorecard["score"]
         if verdict == "uncertain":
             if score is not None:
                 errors.append("uncertain verdict must use a null score")
