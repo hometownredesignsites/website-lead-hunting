@@ -19,7 +19,8 @@ except ImportError:
 
 
 VIEWPORTS = {
-    "desktop": {"width": 1440, "height": 1000},
+    # Match the exact crop dimensions consumed by prepare_chatgpt_visual_review.py.
+    "desktop": {"width": 1440, "height": 900},
     "mobile": {"width": 390, "height": 844},
 }
 MIN_VERIFIED_SCROLL_PX = 150
