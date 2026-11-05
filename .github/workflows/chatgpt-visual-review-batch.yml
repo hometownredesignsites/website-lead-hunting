@@ -261,7 +261,7 @@ jobs:
           python tools/validate_visual_review_captures.py "${validation_args[@]}" \
             > "$REVIEW_DIR/scroll-validation.log" 2>&1
 
-      - name: Assess screenshots with the proven in-session retry behavior
+      - name: Assess the same validated captures in three fresh ChatGPT sessions
         id: review
         if: steps.prepare.outcome == 'success' && steps.validate_scroll.outcome == 'success'
         continue-on-error: true
@@ -272,46 +272,47 @@ jobs:
           REVIEW_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID"
           ATTEMPT_ROOT="$REVIEW_DIR/attempts"
           mkdir -p "$ATTEMPT_ROOT"
-          ATTEMPT_DIR="$ATTEMPT_ROOT/1"
-          mkdir -p "$ATTEMPT_DIR"
-          review_rc=0
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python tools/chatgpt_file_playwright_anonymous_ci.py \
-              --stage-name chatgpt_visual_review \
-              --input-file "$REVIEW_DIR/website-review/prompt.txt" \
-              --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
-              --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
-              --output-file "$ATTEMPT_DIR/response.md" \
-              --metadata-output-file "$ATTEMPT_DIR/metadata.json" \
-              --success-screenshot "$ATTEMPT_DIR/chatgpt-response.png" \
-              --error-screenshot "$ATTEMPT_DIR/chatgpt-error.png" \
-              --network-log \
-              --network-log-file "$ATTEMPT_DIR/chatgpt-network.log" \
-              --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID" \
-              --allow-retry \
-              --refresh-before-retry \
-              --wait-seconds 70 \
-              --timeout-ms 120000 \
-              --post-response-wait-seconds 2 \
-              --response-settle-seconds 2 \
-              --max-settle-wait-seconds 30 \
-              --expect-review-score \
-              --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
-              --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
-              --image-file "$REVIEW_DIR/website-review/mobile_top.jpg" \
-              --image-file "$REVIEW_DIR/website-review/mobile_mid.jpg" \
-              > "$ATTEMPT_DIR/runner.log" 2>&1 || review_rc=$?
+          for replicate in 1 2 3; do
+            ATTEMPT_DIR="$ATTEMPT_ROOT/$replicate"
+            mkdir -p "$ATTEMPT_DIR"
+            review_rc=0
+            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+              python tools/chatgpt_file_playwright_anonymous_ci.py \
+                --stage-name chatgpt_visual_review_replicate_$replicate \
+                --input-file "$REVIEW_DIR/website-review/prompt.txt" \
+                --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
+                --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
+                --output-file "$ATTEMPT_DIR/response.md" \
+                --metadata-output-file "$ATTEMPT_DIR/metadata.json" \
+                --success-screenshot "$ATTEMPT_DIR/chatgpt-response.png" \
+                --error-screenshot "$ATTEMPT_DIR/chatgpt-error.png" \
+                --network-log \
+                --network-log-file "$ATTEMPT_DIR/chatgpt-network.log" \
+                --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-$replicate" \
+                --allow-retry \
+                --refresh-before-retry \
+                --wait-seconds 70 \
+                --timeout-ms 120000 \
+                --post-response-wait-seconds 2 \
+                --response-settle-seconds 2 \
+                --max-settle-wait-seconds 30 \
+                --expect-review-score \
+                --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
+                --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
+                --image-file "$REVIEW_DIR/website-review/mobile_top.jpg" \
+                --image-file "$REVIEW_DIR/website-review/mobile_mid.jpg" \
+                > "$ATTEMPT_DIR/runner.log" 2>&1 || review_rc=$?
 
-          if [[ "$review_rc" -eq 0 ]]; then
-            python tools/validate_chatgpt_visual_review.py \
-              --response "$ATTEMPT_DIR/response.md" \
-              --metadata "$ATTEMPT_DIR/metadata.json" \
-              --context "$REVIEW_DIR/website-review/candidate-context.json" \
-              --output "$ATTEMPT_DIR/review-result.json" \
-              > "$ATTEMPT_DIR/validation.log" 2>&1 || review_rc=$?
-          fi
+            if [[ "$review_rc" -eq 0 ]]; then
+              python tools/validate_chatgpt_visual_review.py \
+                --response "$ATTEMPT_DIR/response.md" \
+                --metadata "$ATTEMPT_DIR/metadata.json" \
+                --context "$REVIEW_DIR/website-review/candidate-context.json" \
+                --output "$ATTEMPT_DIR/review-result.json" \
+                > "$ATTEMPT_DIR/validation.log" 2>&1 || review_rc=$?
+            fi
 
-          python - "$ATTEMPT_DIR" "$review_rc" <<'PY'
+            python - "$ATTEMPT_DIR" "$review_rc" <<'PY'
           import json, sys
           from pathlib import Path
           from tools.visual_review_status import classify_attempt
@@ -332,31 +333,36 @@ jobs:
           (attempt_dir / "attempt-status.json").write_text(json.dumps(decision, indent=2) + "\n", encoding="utf-8")
           print(decision["status"])
           PY
-          final_status=$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' "$ATTEMPT_DIR/attempt-status.json")
-          if [[ -f "$ATTEMPT_DIR/review-result.json" ]]; then
-            cp "$ATTEMPT_DIR/review-result.json" "$REVIEW_DIR/website-review/review-result.json"
-          fi
-          if [[ -f "$ATTEMPT_DIR/response.md" ]]; then
-            cp "$ATTEMPT_DIR/response.md" "$REVIEW_DIR/response.md"
-          fi
-          if [[ -f "$ATTEMPT_DIR/metadata.json" ]]; then
-            cp "$ATTEMPT_DIR/metadata.json" "$REVIEW_DIR/metadata.json"
-          fi
+          done
 
-          python - "$REVIEW_DIR" "$final_status" <<'PY'
+          aggregate_rc=0
+          python tools/aggregate_visual_review_replicates.py \
+            --attempt-root "$ATTEMPT_ROOT" \
+            --output "$REVIEW_DIR/website-review/review-result.json" \
+            > "$REVIEW_DIR/replicate-aggregation.json" || aggregate_rc=$?
+
+          python - "$REVIEW_DIR" "$aggregate_rc" <<'PY'
           import json, sys
           from datetime import datetime, timezone
           from pathlib import Path
           review_dir = Path(sys.argv[1])
+          aggregate_rc = int(sys.argv[2])
+          aggregate = json.loads((review_dir / "website-review/review-result.json").read_text(encoding="utf-8"))
           attempts = []
           for path in sorted((review_dir / "attempts").glob("*/attempt-status.json"), key=lambda p: int(p.parent.name)):
               attempts.append(json.loads(path.read_text(encoding="utf-8")))
+          incomplete = [item for item in attempts if item.get("status") != "passed"]
+          retryable = any(item.get("retryable") for item in incomplete)
+          status = "passed" if aggregate_rc == 0 else "retry-needed" if retryable else "failed"
           envelope = {
               "candidate_id": review_dir.name,
-              "status": sys.argv[2],
+              "status": status,
               "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-              "failure_class": attempts[-1].get("failure_class") if attempts and sys.argv[2] != "passed" else None,
-              "error": attempts[-1].get("error") if attempts and sys.argv[2] != "passed" else None,
+              "failure_class": next((item.get("failure_class") for item in incomplete if item.get("failure_class")), None),
+              "error": aggregate.get("errors") if status != "passed" else None,
+              "replicate_count_required": 3,
+              "aggregate_score": (aggregate.get("review") or {}).get("visual_opportunity_score"),
+              "aggregate_verdict": aggregate.get("site_outcome"),
               "attempts": attempts,
           }
           (review_dir / "review-envelope.json").write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
@@ -382,6 +388,8 @@ jobs:
           review_dir = Path("artifacts/chatgpt-visual-review") / candidate_id
           result_path = review_dir / "website-review" / "review-result.json"
           result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
+          review_envelope_path = review_dir / "review-envelope.json"
+          review_envelope = json.loads(review_envelope_path.read_text(encoding="utf-8")) if review_envelope_path.is_file() else None
           source_available = os.environ.get("SOURCE_ARTIFACT_OUTCOME") == "success"
           preparation_ok = os.environ.get("PREPARE_OUTCOME") == "success"
           scroll_validation_ok = os.environ.get("SCROLL_VALIDATION_OUTCOME") == "success"
@@ -392,11 +400,10 @@ jobs:
               status = "failed"
               failure_class = "scroll_capture_not_verified"
               error = "A distinct mid-page view could not be verified; ChatGPT was not sent duplicate screenshots."
-          elif attempts:
-              decision = attempts[-1]
-              status = decision["status"]
-              failure_class = decision.get("failure_class")
-              error = decision.get("error")
+          elif isinstance(review_envelope, dict):
+              status = review_envelope.get("status", "retry-needed")
+              failure_class = review_envelope.get("failure_class")
+              error = review_envelope.get("error")
           else:
               from tools.visual_review_status import classify_attempt
               decision = classify_attempt(

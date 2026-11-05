@@ -47,7 +47,11 @@ An uncertain state on any required factor yields an Uncertain site outcome with 
 
 ## Durable evidence
 
-Each scorecard record stores process status separately from validation status, retry state, and site outcome, alongside normalized factor states and severities, factor evidence and source, structured script-audit summary, page-flow measurements, screenshot observations, explanatory issue notes, the Python-calculated score/verdict when valid, and the complete raw model response. Invalid scorecards are not accepted as numeric results. The private candidate ledger retains these durable results. Screenshots and detailed browser diagnostics remain in the public workflow's seven-day artifact. No post-evaluation provider-specific weight or score offset is applied.
+For each candidate, capture validation runs before image assessment. A passing validation establishes one four-image set: desktop top/mid and mobile top/mid. Three independent ChatGPT browser sessions receive the exact same four files; each session has a fresh Xvfb display and browser profile. This isolates variation in model/session responses from variation in screenshots.
+
+All three responses must produce valid, non-uncertain scorecards before a durable aggregate rating is written. Python calculates the arithmetic mean of the three individual scores, rounds half up to an integer, and applies the same Pass 0–49, Medium 50–74, and High 75–100 bands. The ledger record includes all three individual scores and factor evidence, the mean, minimum, maximum, range, and each raw model response. If capture validation fails, images are not submitted. If one or more assessment replicates fail validation or are uncertain, the candidate receives no aggregate score and enters the existing retry or failed path.
+
+Each scorecard record stores process status separately from validation status, retry state, and site outcome, alongside normalized factor states and severities, factor evidence and source, structured script-audit summary, page-flow measurements, screenshot observations, explanatory issue notes, the Python-calculated score/verdict when valid, and the complete raw model responses. Invalid or incomplete replicate sets are not accepted as numeric results. The private candidate ledger retains these durable results. Screenshots and detailed browser diagnostics remain in the public workflow's seven-day artifact. No post-evaluation provider-specific weight or score offset is applied.
 
 ## Human-label calibration
 
