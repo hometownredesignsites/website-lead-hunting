@@ -76,7 +76,7 @@ def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES) -> tu
 
 
 def validate_scheduled_retry(run_dir: Path, candidate_ids: list[str], retry_round: int,
-                             retry_request_id: str, source_run_id: str) -> None:
+                             retry_request_id: str, source_run_id: str) -> dict[str, str | None]:
     queue_path = run_dir / "CHATGPT_VISUAL_REVIEW_RETRY_QUEUE.json"
     if not queue_path.is_file():
         raise ValueError("Scheduled retry queue record is missing; refusing an unqueued automatic retry.")
@@ -90,6 +90,7 @@ def validate_scheduled_retry(run_dir: Path, candidate_ids: list[str], retry_roun
             row = json.loads(line)
             ledger[row.get("candidate_id")] = row
     invalid = []
+    failure_classes: dict[str, str | None] = {}
     for candidate_id in candidate_ids:
         entry = entries.get(candidate_id) or {}
         last_attempt = (ledger.get(candidate_id) or {}).get("chatgpt_visual_review_last_attempt") or {}
@@ -101,9 +102,11 @@ def validate_scheduled_retry(run_dir: Path, candidate_ids: list[str], retry_roun
                 or str(last_attempt.get("source_lead_hunt_run_id")) != str(source_run_id)
                 or str(last_attempt.get("review_workflow_run_id")) != str(entry.get("last_review_workflow_run_id"))):
             invalid.append(candidate_id)
+        failure_classes[candidate_id] = entry.get("failure_class") or last_attempt.get("failure_class")
     if invalid:
         raise ValueError("Scheduled retry request is stale or not recorded as dispatched for: "
                          + ", ".join(invalid))
+    return failure_classes
 
 
 def main() -> int:
@@ -121,12 +124,16 @@ def main() -> int:
         if not args.run_dir:
             raise ValueError("Automatic selection requires --run-dir")
         ids, eligible_count = select_eligible_candidates(args.run_dir)
+    failure_classes: dict[str, str | None] = {}
     if args.retry_request_id:
         if not args.run_dir or args.retry_round < 1:
             raise ValueError("A scheduled retry requires --run-dir and a positive --retry-round")
-        validate_scheduled_retry(args.run_dir, ids, args.retry_round,
-                                 args.retry_request_id, args.source_run_id)
-    matrix = {"include": [{"candidate_id": candidate_id} for candidate_id in ids]}
+        failure_classes = validate_scheduled_retry(args.run_dir, ids, args.retry_round,
+                                                   args.retry_request_id, args.source_run_id)
+    matrix = {"include": [{
+        "candidate_id": candidate_id,
+        "recapture_screenshots": failure_classes.get(candidate_id) == "uncertain_visual_evidence",
+    } for candidate_id in ids]}
     serialized_matrix = json.dumps(matrix, separators=(",", ":"))
     serialized_ids = json.dumps(ids, separators=(",", ":"))
     if args.github_output:

@@ -161,12 +161,15 @@ def main() -> int:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--candidate-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--screenshot-override-dir", type=Path,
+                        help="Optional directory with freshly captured desktop.png and mobile.png files")
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve()
     output_dir = args.output_dir.resolve()
     candidate = load_candidate(run_dir, args.candidate_id)
     screenshot_record = candidate.get("screenshots") or {}
+    override_dir = args.screenshot_override_dir.resolve() if args.screenshot_override_dir else None
     page_flow = script_audit_summary(candidate).get("visual_page_flow") or {}
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
@@ -174,9 +177,10 @@ def main() -> int:
     mid_page_scroll_fractions = {"desktop": 0.25, "mobile": 0.48}
     for viewport in ("desktop", "mobile"):
         record = screenshot_record.get(viewport) or {}
-        if record.get("status") != "saved" or not record.get("path"):
+        if override_dir is None and (record.get("status") != "saved" or not record.get("path")):
             raise ValueError(f"Candidate {args.candidate_id} has no saved {viewport} screenshot")
-        source = resolve_screenshot(record["path"], run_dir)
+        source = (override_dir / f"{viewport}.png" if override_dir else
+                  resolve_screenshot(record["path"], run_dir))
         if source is None:
             raise FileNotFoundError(
                 f"Saved {viewport} screenshot is unavailable in the downloaded lead-hunt artifact"
@@ -203,7 +207,7 @@ def main() -> int:
                     "view": view,
                     "path": str(target),
                     "filename": target.name,
-                    "source_path": record["path"],
+                    "source_path": (str(source) if override_dir else record["path"]),
                     "bytes": target.stat().st_size,
                     "source_dimensions": {"width": original_size[0], "height": original_size[1]},
                     "uploaded_dimensions": {"width": image.width, "height": crop_height},

@@ -63,6 +63,15 @@ def classify_attempt(
                 "error": preparation_error or "Candidate screenshots could not be prepared."}
 
     if isinstance(result, Mapping) and result.get("status") == PASS and process_exit_code == 0:
+        review = result.get("review")
+        if isinstance(review, Mapping) and review.get(
+                "visual_verdict", review.get("model_reported_visual_verdict")) == "uncertain":
+            return {
+                "status": RETRY,
+                "retryable": True,
+                "failure_class": "uncertain_visual_evidence",
+                "error": "The visual assessment returned an uncertain verdict; one delayed retry with fresh screenshots is warranted.",
+            }
         return {"status": PASS, "retryable": False, "failure_class": None, "error": None}
 
     errors = result.get("errors", []) if isinstance(result, Mapping) else []

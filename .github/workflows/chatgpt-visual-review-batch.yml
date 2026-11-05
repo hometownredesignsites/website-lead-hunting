@@ -185,8 +185,9 @@ jobs:
           run-id: ${{ needs.plan.outputs.source_run_id }}
           path: artifacts/lead-hunt-source/runs/${{ needs.plan.outputs.run_key }}
 
-      - name: Prepare this candidate's four desktop/mobile top and mid screenshots
-        id: prepare
+      - name: Recapture desktop and mobile pages after an uncertain assessment
+        id: recapture
+        if: matrix.recapture_screenshots == true
         continue-on-error: true
         shell: bash
         env:
@@ -194,14 +195,43 @@ jobs:
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
         run: |
           ARTIFACT_RUN_DIR="artifacts/lead-hunt-source/runs/$REVIEW_RUN_KEY"
+          RECAPTURE_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/recaptured"
+          mkdir -p "$RECAPTURE_DIR"
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            python tools/recapture_visual_review_screenshots.py \
+              --run-dir "$ARTIFACT_RUN_DIR" \
+              --candidate-id "$REVIEW_CANDIDATE_ID" \
+              --output-dir "$RECAPTURE_DIR" \
+              > "$RECAPTURE_DIR/recapture.log" 2>&1
+
+      - name: Prepare this candidate's four desktop/mobile top and mid screenshots
+        id: prepare
+        continue-on-error: true
+        shell: bash
+        env:
+          REVIEW_RUN_KEY: ${{ needs.plan.outputs.run_key }}
+          REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+          RECAPTURE_REQUIRED: ${{ matrix.recapture_screenshots }}
+          RECAPTURE_OUTCOME: ${{ steps.recapture.outcome }}
+        run: |
+          ARTIFACT_RUN_DIR="artifacts/lead-hunt-source/runs/$REVIEW_RUN_KEY"
           if [[ ! -f "$ARTIFACT_RUN_DIR/CANDIDATE_LEDGER.jsonl" ]]; then
             echo "Lead-hunt artifact is unavailable or expired; checked-out repository screenshots are not used as a fallback." >&2
             exit 1
           fi
+          prepare_args=()
+          if [[ "$RECAPTURE_REQUIRED" == "true" ]]; then
+            if [[ "$RECAPTURE_OUTCOME" != "success" ]]; then
+              echo "This uncertain-result retry requires fresh screenshots, but recapture did not succeed." >&2
+              exit 1
+            fi
+            prepare_args+=(--screenshot-override-dir "artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/recaptured")
+          fi
           python tools/prepare_chatgpt_visual_review.py \
             --run-dir "$ARTIFACT_RUN_DIR" \
             --candidate-id "$REVIEW_CANDIDATE_ID" \
-            --output-dir "artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/website-review"
+            --output-dir "artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/website-review" \
+            "${prepare_args[@]}"
 
       - name: Assess screenshots with the proven in-session retry behavior
         id: review

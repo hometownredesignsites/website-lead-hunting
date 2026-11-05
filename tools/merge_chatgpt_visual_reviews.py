@@ -96,6 +96,16 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         result = envelope.get("result") or {}
         valid_result = isinstance(result, dict)
         review = result.get("review") if valid_result else None
+        uncertain_verdict = (
+            isinstance(review, dict)
+            and review.get("visual_verdict", review.get("model_reported_visual_verdict")) == "uncertain"
+        )
+        if uncertain_verdict and envelope.get("status") == "passed":
+            envelope["status"] = "retry-needed"
+            envelope["failure_class"] = "uncertain_visual_evidence"
+            envelope["error"] = envelope.get("error") or (
+                "The visual assessment returned an uncertain verdict; one delayed retry with fresh screenshots is warranted."
+            )
         successful = (envelope.get("status") == "passed" and valid_result
                       and result.get("status") == "passed"
                       and isinstance(review, dict) and review.get("candidate_id") == candidate_id)
@@ -158,6 +168,7 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
             "source_lead_hunt_run_id": str(source_run_id),
             "last_review_workflow_run_id": str(review_run_id),
             "last_status": status,
+            "failure_class": last_attempt.get("failure_class"),
             "updated_at": now,
         })
         if city_campaign_key:
@@ -169,7 +180,10 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
             entry.update({"status": "failed", "not_before": None,
                           "last_dispatch_error": None})
         elif status == "retry-needed":
-            if automatic_retry_round < max_automatic_retry_rounds:
+            retry_limit = (min(max_automatic_retry_rounds, 1)
+                           if last_attempt.get("failure_class") == "uncertain_visual_evidence"
+                           else max_automatic_retry_rounds)
+            if automatic_retry_round < retry_limit:
                 retry_round = automatic_retry_round + 1
                 request_key = f"{source_run_id}:{review_run_id}:{candidate_id}:{retry_round}"
                 request_id = hashlib.sha256(request_key.encode("utf-8")).hexdigest()[:24]
