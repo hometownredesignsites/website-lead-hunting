@@ -160,10 +160,11 @@ def main() -> int:
         review["visual_verdict"] = scorecard["verdict"]
         review["score_calibration"] = {
             "version": ASSESSMENT_VERSION,
-            "method": "sum factor points; confirmed first-viewport hero-media absence is at least 45 points (replaces weaker points for that same factor); none=0, minor=5, moderate=25, severe=50; capped at 100",
+            "method": "sum factor points; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor (replacing weaker points for that factor); none=0, minor=5, moderate=25, severe=50; capped at 100",
             "factor_points": {key: {"severity": scorecard["factors"][key]["severity"], "points": value} for key, value in scorecard.get("factor_points", {}).items()},
             "hero_media_status": scorecard.get("hero_media_status"),
             "hero_media_absence_points": scorecard.get("hero_media_absence_points", 0),
+            "dated_design_floor_points": scorecard.get("dated_design_floor_points", 0),
             "uncertain_factors": scorecard["uncertain_factors"],
         }
         review["raw_model_response"] = response_text

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v4"
+ASSESSMENT_VERSION = "fixed-factors-v5"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -98,7 +98,7 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
 
 
 def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
-    """Validate factor evidence and score named issues, with a deterministic absent-hero floor."""
+    """Validate factor evidence and apply deterministic floors for major redesign signals."""
     normalized = {}
     errors = []
     uncertain = []
@@ -135,13 +135,20 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
     hero = (audit or {}).get("hero_media") or {}
     hero_status = str(hero.get("status", "unknown")).casefold()
     hero_absence_points = 45 if hero_status == "absent" else 0
+    dated_design_severity = normalized["design_freshness"]["severity"]
+    dated_design_floor_points = 45 if dated_design_severity in {"moderate", "severe"} else 0
     if hero_absence_points:
         # The missing first-view image/video is one named issue. It replaces a
         # weaker model rating for that same root cause and never double-counts it.
         points["hero_imagery"] = max(points.get("hero_imagery", 0), hero_absence_points)
+    if dated_design_floor_points:
+        # A materially dated overall design is independently a substantial
+        # redesign opportunity, on par with a confirmed missing hero image.
+        points["design_freshness"] = max(points.get("design_freshness", 0), dated_design_floor_points)
     score = min(100, sum(points.values()))
     verdict = "pass" if score < 50 else "medium" if score < 75 else "high"
     return {"errors": [], "factors": normalized, "factor_points": points,
             "hero_media_absence_points": hero_absence_points,
             "hero_media_status": hero_status,
+            "dated_design_floor_points": dated_design_floor_points,
             "score": score, "verdict": verdict, "uncertain_factors": []}

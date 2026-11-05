@@ -35,9 +35,9 @@ The validator calculates the score from these fixed factor ratings, not from how
 | Moderate | 25 |
 | Severe | 50 |
 
-If the script confirms the first viewport has no prominent image, video, or background image, the hero-imagery factor receives at least 45 points. This replaces a lower point value for that same hero issue; it does not count the absent hero twice. Other independently evidenced factor issues add their points.
+If the script confirms the first viewport has no prominent image, video, or background image, the hero-imagery factor receives at least 45 points. A moderate or severe design-freshness finding also receives at least 45 points: that signals a repeated or pervasive dated visual language and represents a redesign opportunity on par with missing hero media. Each floor replaces a lower value within its own factor; it does not count the same issue twice. A minor, isolated outdated detail remains 5 points. Other independently evidenced factor issues add their points.
 
-`score = min(100, sum(points for the seven factors after the absent-hero floor))`
+`score = min(100, sum(points for the seven factors after the applicable hero-media and dated-design floors))`
 
 Verdict bands remain Pass 0–49, Medium 50–74, and High 75–100. The model-reported score/verdict are retained separately; the validator-calculated score and verdict are authoritative.
 
@@ -49,6 +49,6 @@ Each accepted scorecard stores the normalized factor ratings, factor evidence an
 
 ## Human-label calibration
 
-The benchmark joins the interactive `decision` field to the newest provider scorecards by normalized host. It reports coverage, per-label outcome comparisons, provider agreement, and score differences. Use a deterministic, stratified holdout for evaluation; do not use holdout sites to tune factors or thresholds. The current human file has 21 High and 42 Medium labels, no Pass examples. The v4 rubric treats a confirmed text-only first viewport as a 45-point issue and scores image quality and design freshness explicitly. Historical v3 scores are excluded from current-version benchmark comparisons; rerun candidates under v4 before using them for calibration. Do not claim balanced accuracy or threshold quality until the remaining classes are evaluated, and add human-reviewed Pass examples.
+The benchmark joins the interactive `decision` field to the newest provider scorecards by normalized host. It reports coverage, per-label outcome comparisons, provider agreement, and score differences. Use a deterministic, stratified holdout for evaluation; do not use holdout sites to tune factors or thresholds. The current human file has 21 High and 42 Medium labels, no Pass examples. The v5 rubric applies 45-point floors to confirmed absent first-view hero media and moderate/severe dated design, and scores image quality and design freshness explicitly. Historical v3 and v4 scores are excluded from current-version benchmark comparisons; rerun candidates under v5 before using them for calibration. Do not claim balanced accuracy or threshold quality until the remaining classes are evaluated, and add human-reviewed Pass examples.
 
 See [HUMAN_REVIEW_BENCHMARK.md](HUMAN_REVIEW_BENCHMARK.md) for benchmark use and limitations.
