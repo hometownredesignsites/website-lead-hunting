@@ -671,6 +671,9 @@ def _copyright_footer_signal(years: list[int], current_year: int | None = None) 
     older_years = [year for year in displayed_years if year <= current_year - 5]
     return {"status": "possible_stale_footer" if older_years else "no_old_footer_year_detected" if displayed_years else "not_found",
             "displayed_years": displayed_years, "older_years": older_years,
+            "current_year": current_year,
+            "stale_copyright_points": (10 if any(current_year - year > 2 for year in displayed_years)
+                                       else 5 if any(year < current_year for year in displayed_years) else 0),
             "counts_as_content_freshness": False,
             "note": "Copyright years can be automatically generated and do not prove when page content was updated."}
 

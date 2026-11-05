@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v5"
+ASSESSMENT_VERSION = "fixed-factors-v6"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -137,6 +137,13 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
     hero_absence_points = 45 if hero_status == "absent" else 0
     dated_design_severity = normalized["design_freshness"]["severity"]
     dated_design_floor_points = 45 if dated_design_severity in {"moderate", "severe"} else 0
+    copyright_signal = (audit or {}).get("copyright_footer_signal") or {}
+    current_year = copyright_signal.get("current_year")
+    displayed_years = copyright_signal.get("displayed_years") or []
+    stale_years = [year for year in displayed_years
+                   if isinstance(current_year, int) and isinstance(year, int) and year < current_year]
+    oldest_year_gap = max((current_year - year for year in stale_years), default=0) if isinstance(current_year, int) else 0
+    stale_copyright_points = 10 if oldest_year_gap > 2 else 5 if oldest_year_gap else 0
     if hero_absence_points:
         # The missing first-view image/video is one named issue. It replaces a
         # weaker model rating for that same root cause and never double-counts it.
@@ -145,10 +152,11 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
         # A materially dated overall design is independently a substantial
         # redesign opportunity, on par with a confirmed missing hero image.
         points["design_freshness"] = max(points.get("design_freshness", 0), dated_design_floor_points)
-    score = min(100, sum(points.values()))
+    score = min(100, sum(points.values()) + stale_copyright_points)
     verdict = "pass" if score < 50 else "medium" if score < 75 else "high"
     return {"errors": [], "factors": normalized, "factor_points": points,
             "hero_media_absence_points": hero_absence_points,
             "hero_media_status": hero_status,
             "dated_design_floor_points": dated_design_floor_points,
+            "stale_copyright_points": stale_copyright_points,
             "score": score, "verdict": verdict, "uncertain_factors": []}
