@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from playwright_runner.prompt_contracts import extract_json_payload
-from visual_factor_scoring import (ASSESSMENT_VERSION, enforce_script_audit_evidence,
+from visual_factor_scoring import (ASSESSMENT_VERSION, FACTORS, enforce_script_audit_evidence,
                                    normalize_and_score, parse_factor_assessments)
 
 
@@ -33,33 +33,18 @@ SECTION_KEYS = {
 
 
 def parse_labeled_text(response_text: str, context: dict) -> dict | None:
-    score_match = re.search(
-        r"^\s*Visual opportunity score\s*:\s*(?:(\d{1,3})\s*(?:/\s*100|out of 100)?|uncertain(?:\s*\(no score\))?)\s*$",
-        response_text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
-    verdict_match = re.search(
-        r"^\s*Verdict\s*:\s*(high|medium|pass|uncertain)\s*$",
-        response_text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
     confidence_match = re.search(
         r"^\s*Confidence\s*:\s*(low|medium|high)\s*$",
         response_text,
         flags=re.IGNORECASE | re.MULTILINE,
     )
-    if not score_match or not verdict_match or not confidence_match:
-        return None
-
-    verdict = verdict_match.group(1).lower()
-    score = int(score_match.group(1)) if score_match.group(1) else None
-    if (score is None) != (verdict == "uncertain"):
+    if not confidence_match:
         return None
 
     observations = {key: [] for key in SECTION_KEYS.values()}
     current_section = None
     issue_cluster_sections_seen: set[str] = set()
-    scalar_line = re.compile(r"^\s*(?:Visual opportunity score|Verdict|Confidence)\s*:", re.IGNORECASE)
+    scalar_line = re.compile(r"^\s*Confidence\s*:", re.IGNORECASE)
     bullet_prefix = re.compile(r"^\s*(?:[-*•]+|\d+[.)])\s*")
     for line in response_text.splitlines():
         if scalar_line.match(line):
@@ -83,8 +68,6 @@ def parse_labeled_text(response_text: str, context: dict) -> dict | None:
     return {
         "candidate_id": context.get("candidate_id"),
         "website_url": context.get("website_url"),
-        "visual_opportunity_score": score,
-        "visual_verdict": verdict,
         "confidence": confidence_match.group(1).lower(),
         "issue_clusters_reported": issue_cluster_sections_seen == {
             "moderate_issue_clusters", "severe_issue_clusters"
@@ -140,28 +123,41 @@ def main() -> int:
             errors.append("candidate_id does not match the source candidate")
         if review.get("website_url") != context.get("website_url"):
             errors.append("website_url does not match the source candidate")
-        model_verdict = review.get("visual_verdict")
-        model_score = review.get("visual_opportunity_score")
-        if model_verdict not in {"high", "medium", "pass", "uncertain"}:
-            errors.append("visual_verdict is not an allowed value")
-        if model_verdict == "uncertain" and model_score is not None:
-            errors.append("uncertain model verdict must use a null score")
-        elif model_score is not None and (not isinstance(model_score, int) or isinstance(model_score, bool) or not 0 <= model_score <= 100):
-            errors.append("model-reported visual score must be an integer from 0 to 100 or null")
+        if "visual_opportunity_score" in review or "visual_verdict" in review:
+            errors.append("model response must not provide a final score or site verdict; Python is authoritative")
+        if re.search(r"^\s*(?:Visual opportunity score|Verdict)\s*:", response_text,
+                     flags=re.IGNORECASE | re.MULTILINE):
+            errors.append("model response contains a final score/verdict heading; return factor evidence only")
+        if re.search(r"\b(?:durable|final|overall|site)\s+(?:score|verdict|result|assessment)\b.{0,120}\buncertain\b",
+                     response_text, flags=re.IGNORECASE | re.DOTALL):
+            errors.append("model response declares the final result uncertain; express uncertainty on the relevant factor instead")
         factors = parse_factor_assessments(response_text, review)
         audit = context.get("script_audit") or {}
         enforce_script_audit_evidence(factors, audit)
         scorecard = normalize_and_score(factors, audit)
         review["factor_assessments"] = scorecard["factors"]
         errors.extend(scorecard["errors"])
-        review["model_reported_visual_opportunity_score"] = model_score
-        review["model_reported_visual_verdict"] = model_verdict
+        for key, factor in scorecard["factors"].items():
+            if factor.get("state") == "uncertain":
+                continue
+            label = re.escape(FACTORS[key])
+            if key == "interactions":
+                label = r"interaction(?:s)?"
+            uncertainty_near_factor = re.search(
+                rf"(?:{label})[^.\n]{{0,100}}(?:not assessable|cannot be assessed|unable to assess|insufficient evidence|not assessed)"
+                rf"|(?:not assessable|cannot be assessed|unable to assess|insufficient evidence|not assessed)[^.\n]{{0,100}}(?:{label})",
+                response_text, flags=re.IGNORECASE,
+            )
+            if uncertainty_near_factor:
+                errors.append(f"{key} evidence contradicts prose that says the factor is not assessable")
         review["visual_opportunity_score"] = scorecard["score"]
         review["visual_verdict"] = scorecard["verdict"]
+        review["site_outcome"] = scorecard["verdict"]
+        review["review_execution_status"] = "completed"
         review["score_calibration"] = {
             "version": ASSESSMENT_VERSION,
-            "method": "sum factor points; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor; displayed copyright year 1-2 years old adds 5 points, more than 2 years old adds 10; none=0, minor=5, moderate=25, severe=50; capped at 100",
-            "factor_points": {key: {"severity": scorecard["factors"][key]["severity"], "points": value} for key, value in scorecard.get("factor_points", {}).items()},
+            "method": "Python-only sum of assessed factor points; not_applicable factors contribute zero; uncertain factors produce a null score and uncertain site outcome; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor; displayed copyright year 1-2 years old adds 5 points, more than 2 years old adds 10; none=0, minor=5, moderate=25, severe=50; capped at 100",
+            "factor_points": {key: {"state": scorecard["factors"][key]["state"], "severity": scorecard["factors"][key]["severity"], "points": value} for key, value in scorecard.get("factor_points", {}).items()},
             "hero_media_status": scorecard.get("hero_media_status"),
             "hero_media_absence_points": scorecard.get("hero_media_absence_points", 0),
             "dated_design_floor_points": scorecard.get("dated_design_floor_points", 0),
@@ -204,8 +200,21 @@ def main() -> int:
     }:
         errors.append("candidate context must list exactly the four desktop/mobile top and mid screenshots")
 
+    if isinstance(review, dict) and errors:
+        review["review_execution_status"] = "completed"
+        review["scorecard_validation_status"] = "invalid"
+        review["site_outcome"] = "uncertain"
+        review["visual_opportunity_score"] = None
+        review["visual_verdict"] = "uncertain"
+    elif isinstance(review, dict):
+        review["review_execution_status"] = "completed"
+        review["scorecard_validation_status"] = "valid"
+
     result = {
         "status": "passed" if not errors else "failed",
+        "review_execution_status": "completed" if isinstance(review, dict) else "incomplete",
+        "scorecard_validation_status": "valid" if not errors else "invalid",
+        "site_outcome": ((review or {}).get("site_outcome") if not errors else "uncertain"),
         "response_format": response_format,
         "candidate_id": context.get("candidate_id"),
         "expected_uploaded_images": sorted(expected_names),

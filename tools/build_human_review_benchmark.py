@@ -45,7 +45,12 @@ def review_candidates(candidate: dict, provider: str):
     for key in (f"{provider}_visual_review", f"{provider}_visual_review_last_attempt"):
         review = candidate.get(key)
         if isinstance(review, dict) and review:
-            yield review
+            evidence = review.get("review_evidence")
+            if isinstance(evidence, dict):
+                yield {**evidence, **{field: value for field, value in review.items()
+                                     if field != "review_evidence"}}
+            else:
+                yield review
 
 
 def review_sort_key(review: dict) -> tuple[str, int]:
@@ -55,7 +60,7 @@ def review_sort_key(review: dict) -> tuple[str, int]:
 def assessment_fields(candidate: dict | None, provider: str) -> dict:
     prefix = f"{provider}_"
     empty = {prefix + key: "" for key in (
-        "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
+        "score", "verdict", "site_outcome", "validation_status", "confidence", "workflow_run_id", "factor_assessments"
     )}
     if not candidate:
         return {prefix + "status": "not_assessed", prefix + "assessment_version": "", **empty}
@@ -70,16 +75,17 @@ def assessment_fields(candidate: dict | None, provider: str) -> dict:
             **empty,
         }
     chosen = max(factor_reviews, key=review_sort_key)
-    status = chosen.get("status", "not_assessed")
-    if chosen.get("visual_verdict") == "uncertain" or chosen.get("visual_opportunity_score") is None:
-        status = "uncertain" if status == "passed" else status
+    status = chosen.get("review_execution_status") or chosen.get("status", "not_assessed")
+    if status == "passed":
+        status = "completed"
+    site_outcome = chosen.get("site_outcome") or chosen.get("visual_verdict", "")
     return {
         prefix + "status": status,
         prefix + "assessment_version": ASSESSMENT_VERSION,
         prefix + "score": chosen.get("visual_opportunity_score", ""),
-        prefix + "verdict": chosen.get("visual_verdict", ""),
-        prefix + "model_score": chosen.get("model_reported_visual_opportunity_score", ""),
-        prefix + "model_verdict": chosen.get("model_reported_visual_verdict", ""),
+        prefix + "verdict": site_outcome,
+        prefix + "site_outcome": site_outcome,
+        prefix + "validation_status": chosen.get("scorecard_validation_status", ""),
         prefix + "confidence": chosen.get("confidence", ""),
         prefix + "workflow_run_id": chosen.get("review_workflow_run_id", ""),
         prefix + "factor_assessments": json.dumps(chosen.get("factor_assessments"), ensure_ascii=False, sort_keys=True)
@@ -121,7 +127,7 @@ def summarize(rows: list[dict], split: str | None = None) -> dict:
             status_counts[status] = status_counts.get(status, 0) + 1
             label = canonical_label(row.get("decision", ""))
             verdict = canonical_label(row.get(f"{provider}_verdict", ""))
-            if status == "passed" and verdict in {"High", "Medium", "Pass"}:
+            if status in {"completed", "passed"} and verdict in {"High", "Medium", "Pass"}:
                 row_counts = matrix.setdefault(label, {})
                 row_counts[verdict] = row_counts.get(verdict, 0) + 1
                 actual_counts[label] = actual_counts.get(label, 0) + 1
@@ -144,7 +150,7 @@ def summarize(rows: list[dict], split: str | None = None) -> dict:
         }
     paired = [abs(float(row["chatgpt_score"]) - float(row["duckai_score"])) <= 10
               for row in selected
-              if row.get("chatgpt_status") == "passed" and row.get("duckai_status") == "passed"
+              if row.get("chatgpt_status") in {"completed", "passed"} and row.get("duckai_status") in {"completed", "passed"}
               and isinstance(row.get("chatgpt_score"), (int, float))
               and isinstance(row.get("duckai_score"), (int, float))]
     report["provider_score_agreement"] = {
@@ -211,7 +217,7 @@ def main() -> int:
     fields = [*LABEL_FIELDS, "match_status", "benchmark_split", "candidate_ids"]
     for provider in PROVIDERS:
         fields.extend(f"{provider}_{field}" for field in (
-            "status", "assessment_version", "score", "verdict", "model_score", "model_verdict", "confidence", "workflow_run_id", "factor_assessments"
+            "status", "validation_status", "assessment_version", "score", "verdict", "site_outcome", "confidence", "workflow_run_id", "factor_assessments"
         ))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8-sig", newline="") as handle:

@@ -4,7 +4,7 @@ This rubric is used by the ChatGPT visual-review workflow. Scripted technical pr
 
 ## Required factors
 
-Each completed assessment must rate all seven factors and include specific supporting evidence:
+Each completed assessment must classify all seven factors with an explicit assessment state and specific evidence or a reason the factor cannot be rated:
 
 | Factor | Evidence source | What it covers |
 | --- | --- | --- |
@@ -17,6 +17,8 @@ Each completed assessment must rate all seven factors and include specific suppo
 | Interactions | Script audit | Tested controls and interaction failures |
 
 The model must not describe script findings as visually observed. Visual observations and script evidence remain separately identified in the scorecard.
+
+Each factor stores `state` as `assessed`, `not_applicable`, or `uncertain`. Assessed factors also store severity (`none`, `minor`, `moderate`, or `severe`); not-applicable and uncertain factors have no severity. Every factor stores a concrete evidence statement and its required source. “No control was tested” is not evidence that controls work.
 
 The preliminary script audit also checks for image-enlargement affordances on the homepage. When it sees at least four substantial images and finds no direct-image link or explicit lightbox/zoom markup, it adds a small technical-opportunity signal. This is a bounded heuristic: JavaScript can provide a lightbox without an obvious markup hint, so “not detected” is not proof that enlargement is unavailable. It is not one of the seven visual factors and does not establish that an image interaction is broken.
 
@@ -37,18 +39,18 @@ The validator calculates the score from these fixed factor ratings, not from how
 
 If the script confirms the first viewport has no prominent image, video, or background image, the hero-imagery factor receives at least 45 points. A moderate or severe design-freshness finding also receives at least 45 points: that signals a repeated or pervasive dated visual language and represents a redesign opportunity on par with missing hero media. Each floor replaces a lower value within its own factor; it does not count the same issue twice. A minor, isolated outdated detail remains 5 points. Other independently evidenced factor issues add their points.
 
-`score = min(100, sum(points for the seven factors after the applicable hero-media and dated-design floors))`
+`score = min(100, sum(points for assessed factors after the applicable hero-media and dated-design floors) + stale-copyright points)`
 
-Verdict bands remain Pass 0–49, Medium 50–74, and High 75–100. The model-reported score/verdict are retained separately; the validator-calculated score and verdict are authoritative.
+Verdict bands remain Pass 0–49, Medium 50–74, and High 75–100. ChatGPT returns factor evidence only. Python is the sole authority for the numeric score and site outcome. `review_execution_status` records whether ChatGPT returned a response, `scorecard_validation_status` records whether that response passed validation, retry status records whether another attempt is needed, and `site_outcome` records High, Medium, Pass, or Uncertain. These fields describe separate things; a completed review can still have an invalid or uncertain scorecard.
 
-If a factor is explicitly `not_assessable`, the result is Uncertain with a null score. Missing factor ratings or supporting evidence invalidate the scorecard and trigger the existing failure/retry path. The validator never silently assigns zero to missing evidence.
+An uncertain state on any required factor yields an Uncertain site outcome with a null score. A not-applicable factor contributes zero only when there is evidence that the check truly does not apply. For interactions, no discovered safe controls means not applicable; discovered controls left untested means uncertain; tested controls are assessed from their observed results. Missing factor states, severities for assessed factors, evidence, or source invalidate the scorecard and trigger the existing failure/retry path. Explicit model score/verdict headings and prose that contradicts a factor's assessment also invalidate the scorecard. Invalid responses are not saved as numeric site ratings. The validator never silently assigns zero to missing evidence.
 
 ## Durable evidence
 
-Each accepted scorecard stores the normalized factor ratings, factor evidence and source, structured script-audit summary, page-flow measurements, screenshot observations, explanatory issue notes, the model-reported score/verdict, and the complete raw model response. The private candidate ledger retains these with the durable calculated score. Screenshots and detailed browser diagnostics remain in the public workflow's seven-day artifact. No post-evaluation provider-specific weight or score offset is applied.
+Each scorecard record stores process status separately from validation status, retry state, and site outcome, alongside normalized factor states and severities, factor evidence and source, structured script-audit summary, page-flow measurements, screenshot observations, explanatory issue notes, the Python-calculated score/verdict when valid, and the complete raw model response. Invalid scorecards are not accepted as numeric results. The private candidate ledger retains these durable results. Screenshots and detailed browser diagnostics remain in the public workflow's seven-day artifact. No post-evaluation provider-specific weight or score offset is applied.
 
 ## Human-label calibration
 
-The benchmark joins the interactive `decision` field to the newest provider scorecards by normalized host. It reports coverage, per-label outcome comparisons, provider agreement, and score differences. Use a deterministic, stratified holdout for evaluation; do not use holdout sites to tune factors or thresholds. The current human file has 21 High and 42 Medium labels, no Pass examples. The v5 rubric applies 45-point floors to confirmed absent first-view hero media and moderate/severe dated design, and scores image quality and design freshness explicitly. Historical v3 and v4 scores are excluded from current-version benchmark comparisons; rerun candidates under v5 before using them for calibration. Do not claim balanced accuracy or threshold quality until the remaining classes are evaluated, and add human-reviewed Pass examples.
+The benchmark joins the interactive `decision` field to the newest provider scorecards by normalized host. It reports coverage, per-label outcome comparisons, provider agreement, and score differences. Use a deterministic, stratified holdout for evaluation; do not use holdout sites to tune factors or thresholds. The current human file has 21 High and 42 Medium labels, no Pass examples. The v7 rubric applies 45-point floors to confirmed absent first-view hero media and moderate/severe dated design, scores image quality and design freshness explicitly, and requires factor state/evidence validation. Historical v3 through v6 scores are excluded from current-version benchmark comparisons; rerun candidates under v7 before using them for calibration. Do not claim balanced accuracy or threshold quality until the remaining classes are evaluated, and add human-reviewed Pass examples.
 
 See [HUMAN_REVIEW_BENCHMARK.md](HUMAN_REVIEW_BENCHMARK.md) for benchmark use and limitations.

@@ -121,6 +121,9 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
                 envelope["error"] = joined_errors or "Review scorecard failed validation."
         attempt = {
             "status": status,
+            "review_execution_status": (result.get("review_execution_status") if valid_result else None),
+            "scorecard_validation_status": (result.get("scorecard_validation_status") if valid_result else None),
+            "site_outcome": ((review or {}).get("site_outcome") if isinstance(review, dict) else None),
             "candidate_id": candidate_id,
             "reviewed_at": envelope.get("completed_at") or now,
             "source_lead_hunt_run_id": str(source_run_id),
@@ -212,6 +215,10 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
     # was incomplete or conflicted with an existing accepted scorecard.
     statuses: dict[str, int] = {}
     candidate_ids_by_status: dict[str, list[str]] = {"passed": [], "retry-needed": [], "failed": []}
+    site_outcomes: dict[str, int] = {}
+    site_outcomes_by_candidate: dict[str, str] = {}
+    execution_statuses: dict[str, int] = {}
+    validation_statuses: dict[str, int] = {}
     for candidate_id in candidate_ids:
         durable_attempt = by_id[candidate_id].get("chatgpt_visual_review_last_attempt") or {}
         status = durable_attempt.get("status", "retry-needed")
@@ -219,6 +226,15 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
             status = "failed"
         statuses[status] = statuses.get(status, 0) + 1
         candidate_ids_by_status[status].append(candidate_id)
+        outcome = durable_attempt.get("site_outcome")
+        if outcome not in {"high", "medium", "pass", "uncertain"}:
+            outcome = "uncertain"
+        site_outcomes[outcome] = site_outcomes.get(outcome, 0) + 1
+        site_outcomes_by_candidate[candidate_id] = outcome
+        execution = durable_attempt.get("review_execution_status") or "incomplete"
+        validation = durable_attempt.get("scorecard_validation_status") or "invalid"
+        execution_statuses[execution] = execution_statuses.get(execution, 0) + 1
+        validation_statuses[validation] = validation_statuses.get(validation, 0) + 1
     return {
         "candidate_ids": candidate_ids,
         "candidate_ids_by_status": candidate_ids_by_status,
@@ -226,6 +242,10 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
         "source_lead_hunt_run_id": str(source_run_id),
         "review_workflow_run_id": str(review_run_id),
         "statuses": statuses,
+        "execution_statuses": execution_statuses,
+        "scorecard_validation_statuses": validation_statuses,
+        "site_outcomes": site_outcomes,
+        "site_outcomes_by_candidate": site_outcomes_by_candidate,
         "successful": statuses.get("passed", 0),
         "retry_needed": statuses.get("retry-needed", 0),
         "failed": statuses.get("failed", 0),

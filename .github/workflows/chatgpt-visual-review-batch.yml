@@ -523,12 +523,22 @@ jobs:
               retry = int(statuses.get("retry-needed", 0))
               failed = int(statuses.get("failed", 0))
               total = int(data.get("total", passed + retry + failed))
-              report.write(f"**{passed}/{total} passed · {retry} retry-needed · {failed} failed**\n\n")
-              report.write("A green workflow means results were recorded and committed; it does not mean every candidate passed. Candidate-level outcomes are authoritative in the ledger.\n\n")
-              report.write("| Status | Count | Candidate IDs |\n|---|---:|---|\n")
+              executions = data.get("execution_statuses", {})
+              validations = data.get("scorecard_validation_statuses", {})
+              report.write(f"**Review execution:** {int(executions.get('completed', 0))}/{total} completed · {int(executions.get('incomplete', 0))} incomplete\n\n")
+              report.write(f"**Scorecard validation:** {int(validations.get('valid', 0))} valid · {int(validations.get('invalid', 0))} invalid\n\n")
+              report.write(f"**Retry state:** {passed} resolved · {retry} retry-needed · {failed} failed\n\n")
+              outcomes = data.get("site_outcomes", {})
+              report.write("**Site outcomes:** " + " · ".join(
+                  f"{label.title()}: {int(outcomes.get(label, 0))}"
+                  for label in ("high", "medium", "pass", "uncertain")
+              ) + "\n\n")
+              report.write("Execution records whether ChatGPT returned a review. Scorecard validation records whether its evidence passed validation. Site outcome is the separate rating derived by Python; retry state independently records whether another attempt is needed. Candidate-level outcomes are authoritative in the ledger.\n\n")
+              report.write("| Retry state | Count | Candidate IDs |\n|---|---:|---|\n")
               for status in ("passed", "retry-needed", "failed"):
                   ids = data.get("candidate_ids_by_status", {}).get(status, [])
-                  report.write(f"| {status} | {statuses.get(status, 0)} | {', '.join(ids) if ids else '—'} |\n")
+                  label = "resolved" if status == "passed" else status
+                  report.write(f"| {label} | {statuses.get(status, 0)} | {', '.join(ids) if ids else '—'} |\n")
           PY
 
       - name: Commit durable scorecards and run summary to private repository

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v6"
+ASSESSMENT_VERSION = "fixed-factors-v7"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -27,11 +27,15 @@ FACTOR_SOURCES = {
 def parse_factor_assessments(response_text: str, review: dict) -> dict:
     """Parse fixed factor assessments from labeled text or JSON review data."""
     factors = review.get("factor_assessments") or review.get("factors")
-    result = dict(factors) if isinstance(factors, dict) else {}
+    result = {}
+    if isinstance(factors, dict):
+        for key, item in factors.items():
+            if isinstance(item, dict):
+                result[key] = {**item, "state_explicit": bool(item.get("state"))}
     label_to_key = {label.casefold(): key for key, label in FACTORS.items()}
     labels = "|".join(re.escape(label) for label in FACTORS.values())
     pattern = re.compile(
-        rf"(?P<label>{labels})\s*:\s*(?P<severity>none|minor|moderate|severe|not[_ -]assessable)\s*(?:—|--|-|�)\s*",
+        rf"(?P<label>{labels})\s*:\s*(?:(?P<state>assessed|not[_ -]applicable|uncertain)(?:\s*\((?P<severity>none|minor|moderate|severe)\))?|(?P<legacy_severity>none|minor|moderate|severe|not[_ -]assessable))\s*(?:—|--|-|�)\s*",
         flags=re.IGNORECASE,
     )
     matches = list(pattern.finditer(response_text))
@@ -39,27 +43,52 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
         key = label_to_key[match.group("label").casefold()]
         evidence_end = matches[index + 1].start() if index + 1 < len(matches) else len(response_text)
         evidence = response_text[match.end():evidence_end].strip()
-        evidence = re.sub(
-            r"\s*;?\s*source=(?:screenshots|script_audit|screenshots_and_script_audit)\s*$",
-            "", evidence, flags=re.I,
-        ).strip()
+        source_match = re.search(r"\s*;?\s*source=(screenshots|script_audit|screenshots_and_script_audit)\s*$",
+                                 evidence, flags=re.I)
+        source = source_match.group(1).casefold() if source_match else None
+        if source_match:
+            evidence = evidence[:source_match.start()].strip()
         # Some model UIs flatten the entire factor answer into a single paragraph.
         # Ignore the section heading and unrelated content before the first factor.
         if evidence:
-            severity = match.group("severity").casefold().replace(" ", "_").replace("-", "_")
-            result.setdefault(key, {"severity": severity, "evidence": evidence, "source": FACTOR_SOURCES[key]})
+            state = match.group("state")
+            severity = match.group("severity") or match.group("legacy_severity")
+            state = (state or ("uncertain" if severity and severity.casefold().replace("-", "_") == "not_assessable" else "assessed"))
+            state = state.casefold().replace(" ", "_").replace("-", "_")
+            severity = severity.casefold().replace(" ", "_").replace("-", "_") if severity else None
+            result.setdefault(key, {"state": state, "state_explicit": bool(match.group("state")),
+                                    "severity": severity, "evidence": evidence, "source": source})
     return result
 
 
 def has_complete_response_scorecard(response_text: str, review: dict | None = None) -> bool:
-    """Return true only when the response includes a score and all required factors."""
+    """Return true only when the response has a factor-only, evidence-complete contract."""
     review = review or {}
-    has_score = (
-        "visual_opportunity_score" in review
-        or re.search(r"^\s*Visual opportunity score\s*:", response_text, re.IGNORECASE | re.MULTILINE)
-    )
+    if "visual_opportunity_score" in review or "visual_verdict" in review:
+        return False
+    if re.search(r"^\s*(?:Visual opportunity score|Verdict)\s*:", response_text,
+                 re.IGNORECASE | re.MULTILINE):
+        return False
     factors = parse_factor_assessments(response_text, review)
-    return bool(has_score and set(FACTORS).issubset(factors))
+    if set(factors) != set(FACTORS):
+        return False
+    for key in FACTORS:
+        item = factors[key]
+        if not isinstance(item, dict):
+            return False
+        if not item.get("state_explicit"):
+            return False
+        if item.get("state") not in {"assessed", "not_applicable", "uncertain"}:
+            return False
+        if not isinstance(item.get("evidence"), str) or not item["evidence"].strip():
+            return False
+        if item.get("source") != FACTOR_SOURCES[key]:
+            return False
+        if item.get("state") == "assessed" and item.get("severity") not in SEVERITY_POINTS:
+            return False
+        if item.get("state") != "assessed" and item.get("severity") is not None:
+            return False
+    return True
 
 
 def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
@@ -67,7 +96,7 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
     image_status = (audit.get("broken_images") or {}).get("status", "not_run")
     if image_status not in {"clear", "issues_found"}:
         factors["broken_images"] = {
-            "severity": "not_assessable",
+            "state": "uncertain", "severity": None,
             "evidence": f"Automated broken-image audit status is {image_status}; findings are incomplete.",
             "source": "script_audit",
         }
@@ -79,18 +108,27 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
         and interaction_audit.get("tested_count") == 0
         and not interaction_audit.get("findings")
     )
-    if interactions_status in {"clear", "issues_found"} and interaction_not_applicable:
-        # The audit explicitly found no safe menu/tab/disclosure control to test.
-        # That is not a failed interaction and should not make the whole scorecard uncertain.
+    available_count = interaction_audit.get("available_count")
+    tested_count = interaction_audit.get("tested_count", 0)
+    no_controls_to_test = (interaction_not_applicable and
+                           (available_count == 0 or available_count is None))
+    if interactions_status in {"clear", "issues_found"} and no_controls_to_test:
+        # No safe controls is explicitly not applicable and contributes zero points.
         factors["interactions"] = {
-            "severity": "none",
-            "evidence": "The audit found no safe menu, tab, or disclosure controls to test; no failed interaction was observed.",
+            "state": "not_applicable", "severity": None,
+            "evidence": "The audit found no safe menu, tab, or disclosure controls to test.",
+            "source": "script_audit",
+        }
+    elif available_count is not None and available_count > tested_count:
+        factors["interactions"] = {
+            "state": "uncertain", "severity": None,
+            "evidence": f"{available_count} safe controls were found but only {tested_count} were tested; interaction evidence is incomplete.",
             "source": "script_audit",
         }
     elif (interactions_status not in {"clear", "issues_found"}
           or interaction_audit.get("status") not in {"clear", "issues_found"}):
         factors["interactions"] = {
-            "severity": "not_assessable",
+            "state": "uncertain", "severity": None,
             "evidence": f"Automated links/interactions audit status is {interactions_status}; findings are unavailable.",
             "source": "script_audit",
         }
@@ -102,28 +140,40 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
     normalized = {}
     errors = []
     uncertain = []
+    unexpected = sorted(set(factors) - set(FACTORS))
+    if unexpected:
+        errors.append("unexpected scoring factor(s): " + ", ".join(unexpected))
     for key, label in FACTORS.items():
         item = factors.get(key)
         if not isinstance(item, dict):
             errors.append(f"required factor assessment missing: {key}")
             continue
-        severity = str(item.get("severity", "")).strip().casefold().replace(" ", "_").replace("-", "_")
+        state = str(item.get("state", "")).strip().casefold().replace(" ", "_").replace("-", "_")
+        severity_value = item.get("severity")
+        severity = str(severity_value or "").strip().casefold().replace(" ", "_").replace("-", "_")
         evidence = item.get("evidence")
         source = item.get("source")
-        if severity not in {*SEVERITY_POINTS, "not_assessable"}:
-            errors.append(f"{key} severity must be none, minor, moderate, severe, or not_assessable")
+        if state not in {"assessed", "not_applicable", "uncertain"}:
+            errors.append(f"{key} state must be assessed, not_applicable, or uncertain")
+            continue
+        if state == "assessed" and severity not in SEVERITY_POINTS:
+            errors.append(f"{key} assessed severity must be none, minor, moderate, or severe")
+            continue
+        if state in {"not_applicable", "uncertain"} and severity:
+            errors.append(f"{key} {state} assessment must not include a severity")
             continue
         if not isinstance(evidence, str) or not evidence.strip():
             errors.append(f"{key} requires specific supporting evidence or a reason it cannot be assessed")
             continue
-        if source and source != FACTOR_SOURCES[key]:
+        if source != FACTOR_SOURCES[key]:
             errors.append(f"{key} evidence source must be {FACTOR_SOURCES[key]}")
             continue
-        if severity == "not_assessable":
+        if state == "uncertain":
             uncertain.append(key)
         normalized[key] = {
             "label": label,
-            "severity": severity,
+            "state": state,
+            "severity": severity if state == "assessed" else None,
             "evidence": evidence.strip(),
             "source": FACTOR_SOURCES[key],
         }
@@ -131,7 +181,8 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
         return {"errors": errors, "factors": normalized, "score": None, "verdict": "uncertain", "uncertain_factors": uncertain}
     if uncertain:
         return {"errors": [], "factors": normalized, "score": None, "verdict": "uncertain", "uncertain_factors": uncertain}
-    points = {key: SEVERITY_POINTS[item["severity"]] for key, item in normalized.items()}
+    points = {key: SEVERITY_POINTS[item["severity"]] if item["state"] == "assessed" else 0
+              for key, item in normalized.items()}
     hero = (audit or {}).get("hero_media") or {}
     hero_status = str(hero.get("status", "unknown")).casefold()
     hero_absence_points = 45 if hero_status == "absent" else 0

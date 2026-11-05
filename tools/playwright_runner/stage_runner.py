@@ -137,18 +137,22 @@ def run_stage_once(
                 followup_prompt = (
                     "Your previous response was empty. Please retry the visual assessment using the four "
                     "screenshots already attached and the candidate context in this chat. Follow the original "
-                    "rubric and output format. Include the explicit score, verdict, confidence, and labeled "
-                    "observation sections. Return the concise plain-text scorecard without a preamble."
+                    "rubric and output format. Do not provide a score or overall verdict; Python calculates both. "
+                    "Include confidence, labeled observation sections, and all seven factor assessments with "
+                    "state assessed/not_applicable/uncertain, severity only when assessed, specific evidence or "
+                    "reason, and the prescribed source label. Return the concise plain-text scorecard without a preamble."
                 )
             else:
                 followup_prompt = (
                     "Your previous response did not include the required explicit scorecard. Please retry the "
                     "visual assessment using the four screenshots already attached and the candidate context "
-                    "in this chat. Follow the original rubric and output format, include the labeled score, "
-                    "verdict, confidence, observation sections, and all five factor assessments with severity, "
-                    "specific evidence, and the prescribed source label. Use the factor names Hero imagery, "
-                    "Readability, Layout and mobile use, Broken images, and Interactions. Return only the "
-                    "concise plain-text scorecard without a preamble."
+                    "in this chat. Follow the original rubric and output format. Do not provide a score or "
+                    "overall verdict; Python calculates both. Include confidence, observation sections, and all "
+                    "seven factor assessments, each with state assessed/not_applicable/uncertain, severity only "
+                    "when assessed, specific evidence or reason, and the prescribed source label. Use the factor "
+                    "names Hero imagery, Image quality, Design freshness, Readability, Layout and mobile use, "
+                    "Broken images, and Interactions. If your limitations say a factor cannot be assessed, mark "
+                    "that factor uncertain. Return only the concise plain-text scorecard without a preamble."
                 )
             send_prompt(page, followup_composer, followup_prompt)
             page.wait_for_timeout(1200)

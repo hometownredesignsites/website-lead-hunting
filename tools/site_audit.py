@@ -744,7 +744,7 @@ async def _smoke_test_controls(page, controls: list[dict]) -> dict:
                             "result": "interaction_error", "error": f"{type(exc).__name__}: {exc}"[:250]})
     failed = [row for row in results if row["result"] != "responded"]
     return {"status": "issues_found" if failed else "clear" if results else "not_applicable",
-            "tested_count": len(results), "findings": results,
+            "available_count": len(controls), "tested_count": len(results), "findings": results,
             "scope_note": "Smoke test only for accessible menu/disclosure/tab controls; form submissions and purchase/account actions are excluded."}
 
 
