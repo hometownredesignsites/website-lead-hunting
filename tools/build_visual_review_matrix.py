@@ -117,10 +117,14 @@ def main() -> int:
     parser.add_argument("--retry-round", type=int, default=0)
     parser.add_argument("--retry-request-id", default="")
     parser.add_argument("--source-run-id", default="")
+    parser.add_argument("--refresh-screenshots", action="store_true",
+                        help="Recapture screenshots for an explicitly selected manual review")
     args = parser.parse_args()
     ids = parse_candidate_ids(args.candidate_ids)
     eligible_count = None
     if not ids:
+        if args.refresh_screenshots:
+            raise ValueError("--refresh-screenshots requires explicit candidate IDs")
         if not args.run_dir:
             raise ValueError("Automatic selection requires --run-dir")
         ids, eligible_count = select_eligible_candidates(args.run_dir)
@@ -132,7 +136,10 @@ def main() -> int:
                                                    args.retry_request_id, args.source_run_id)
     matrix = {"include": [{
         "candidate_id": candidate_id,
-        "recapture_screenshots": failure_classes.get(candidate_id) == "uncertain_visual_evidence",
+        "recapture_screenshots": (
+            args.refresh_screenshots
+            or failure_classes.get(candidate_id) == "uncertain_visual_evidence"
+        ),
     } for candidate_id in ids]}
     serialized_matrix = json.dumps(matrix, separators=(",", ":"))
     serialized_ids = json.dumps(ids, separators=(",", ":"))

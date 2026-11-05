@@ -16,6 +16,11 @@ on:
         required: false
         default: ""
         type: string
+      refresh_screenshots:
+        description: "Capture fresh desktop/mobile screenshots for an explicitly selected candidate (useful for a controlled rerun)"
+        required: false
+        default: false
+        type: boolean
       automatic_retry_round:
         description: "Managed by the retry scheduler; leave at 0 for a manual review"
         required: false
@@ -121,13 +126,19 @@ jobs:
           RETRY_REQUEST_ID: ${{ inputs.retry_request_id }}
           CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
           SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
+          REFRESH_SCREENSHOTS: ${{ inputs.refresh_screenshots }}
         run: |
+          matrix_args=()
+          if [[ "$REFRESH_SCREENSHOTS" == "true" ]]; then
+            matrix_args+=(--refresh-screenshots)
+          fi
           python tools/build_visual_review_matrix.py \
             --candidate-ids "$REVIEW_CANDIDATE_IDS" \
             --run-dir "runs/$REVIEW_RUN_KEY" \
             --retry-round "$RETRY_ROUND" \
             --retry-request-id "$RETRY_REQUEST_ID" \
             --source-run-id "$SOURCE_RUN_ID" \
+            "${matrix_args[@]}" \
             --github-output "$GITHUB_OUTPUT"
           python - <<'PY'
           import json, os
