@@ -30,6 +30,8 @@ TRANSIENT_RUNNER_MARKERS = (
 PERMANENT_RUNNER_MARKERS = (
     "captcha",
     "human verification",
+    "modulenotfounderror",
+    "no module named",
     "module not found",
     "no such file or directory",
     "invalid argument",

@@ -17,7 +17,7 @@ class VisualReviewRecoveryTests(unittest.TestCase):
         workflow = Path(".github/workflows/chatgpt-visual-review-batch.yml").read_text(encoding="utf-8")
         review_jobs = workflow.split("\n  notify_city_campaign:", 1)[0]
         self.assertIn("xvfb-run --auto-servernum", workflow)
-        self.assertIn("tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID\"", workflow)
+        self.assertIn("tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-$replicate\"", workflow)
         self.assertIn("--allow-retry", workflow)
         self.assertIn("--refresh-before-retry", workflow)
         self.assertNotIn("for attempt in 1 2 3", review_jobs)

@@ -16,7 +16,8 @@ from validate_chatgpt_visual_review import main as validate_chatgpt_review
 
 class VisualFactorScoringTests(unittest.TestCase):
     def factors(self, severity="none"):
-        return {key: {"severity": severity, "evidence": f"Evidence for {key}", "source": source}
+        return {key: {"state": "assessed", "severity": severity,
+                      "evidence": f"Evidence for {key}", "source": source}
                 for key, source in FACTOR_SOURCES.items()}
 
     def test_fixed_factor_weights_and_verdict_bands(self):
@@ -51,7 +52,7 @@ class VisualFactorScoringTests(unittest.TestCase):
 
     def test_not_assessable_factor_returns_uncertain_without_score(self):
         factors = self.factors()
-        factors["broken_images"]["severity"] = "not_assessable"
+        factors["broken_images"].update(state="uncertain", severity=None)
         result = normalize_and_score(factors)
         self.assertEqual((result["score"], result["verdict"]), (None, "uncertain"))
 
@@ -95,7 +96,6 @@ class VisualFactorScoringTests(unittest.TestCase):
         factors["hero_imagery"]["severity"] = "minor"
         review = {
             "candidate_id": "candidate-1", "website_url": "https://example.com",
-            "visual_verdict": "pass", "visual_opportunity_score": 49,
             "confidence": "high", "factor_assessments": factors,
             "desktop_top_observations": ["Desktop top checked"],
             "desktop_mid_observations": ["Desktop mid checked"],
@@ -147,36 +147,34 @@ class VisualFactorScoringTests(unittest.TestCase):
     def test_score_only_response_is_incomplete_until_all_factor_lines_exist(self):
         score_only = "Visual opportunity score: 62/100\nVerdict: medium"
         self.assertFalse(has_complete_response_scorecard(score_only))
-        complete = score_only + "\n" + "\n".join((
-            "Hero imagery: minor — text-only hero; source=screenshots",
-            "Image quality: none — photos are sharp; source=screenshots",
-            "Design freshness: none — visual language is cohesive; source=screenshots",
-            "Readability: none — heading is legible; source=screenshots",
-            "Layout and mobile use: none — controls fit the viewport; source=screenshots",
-            "Broken images: none — no failed images; source=script_audit",
-            "Interactions: none — controls responded; source=script_audit",
+        complete = "\n".join((
+            "Hero imagery: assessed (minor) — text-only hero; source=screenshots",
+            "Image quality: assessed (none) — photos are sharp; source=screenshots",
+            "Design freshness: assessed (none) — visual language is cohesive; source=screenshots",
+            "Readability: assessed (none) — heading is legible; source=screenshots",
+            "Layout and mobile use: assessed (none) — controls fit the viewport; source=screenshots",
+            "Broken images: assessed (none) — no failed images; source=script_audit",
+            "Interactions: assessed (none) — controls responded; source=script_audit",
         ))
         self.assertTrue(has_complete_response_scorecard(complete))
 
     def test_flattened_factor_assessments_are_parsed_from_one_paragraph(self):
         flattened = (
             "Limitations: no script-audit evidence. Factor assessments: "
-            "Hero imagery: minor — text-only hero; source=screenshots "
-            "Image quality: none — photos are sharp; source=screenshots "
-            "Design freshness: moderate — dated typography and controls; source=screenshots "
-            "Readability: moderate — small dense text; source=screenshots "
-            "Layout and mobile use: moderate — tightly packed mobile layout; source=screenshots "
-            "Broken images: not_assessable — audit not provided; source=script_audit "
-            "Interactions: not_assessable — audit not provided; source=script_audit"
+            "Hero imagery: assessed (minor) — text-only hero; source=screenshots "
+            "Image quality: assessed (none) — photos are sharp; source=screenshots "
+            "Design freshness: assessed (moderate) — dated typography and controls; source=screenshots "
+            "Readability: assessed (moderate) — small dense text; source=screenshots "
+            "Layout and mobile use: assessed (moderate) — tightly packed mobile layout; source=screenshots "
+            "Broken images: uncertain — audit not provided; source=script_audit "
+            "Interactions: uncertain — audit not provided; source=script_audit"
         )
         factors = parse_factor_assessments(flattened, {})
         self.assertEqual(set(factors), set(FACTORS))
         self.assertEqual(factors["readability"]["severity"], "moderate")
-        self.assertTrue(has_complete_response_scorecard(
-            "Visual opportunity score: 55/100\n" + flattened
-        ))
-        partial_json = {"visual_opportunity_score": 55, "factor_assessments": {
-            "hero_imagery": {"severity": "none", "evidence": "JSON value", "source": "screenshots"}
+        self.assertTrue(has_complete_response_scorecard(flattened))
+        partial_json = {"factor_assessments": {
+            "hero_imagery": {"state": "assessed", "severity": "none", "evidence": "JSON value", "source": "screenshots"}
         }}
         merged = parse_factor_assessments(flattened, partial_json)
         self.assertEqual(len(merged), len(FACTORS))
@@ -206,7 +204,8 @@ class VisualFactorScoringTests(unittest.TestCase):
             "score_calibration": {"version": ASSESSMENT_VERSION}, "factor_assessments": {"hero_imagery": {"severity": "minor"}},
         }}
         fields = assessment_fields(factor, "chatgpt")
-        self.assertEqual(fields["chatgpt_status"], "uncertain")
+        self.assertEqual(fields["chatgpt_status"], "completed")
+        self.assertEqual(fields["chatgpt_site_outcome"], "uncertain")
         self.assertEqual(fields["chatgpt_assessment_version"], ASSESSMENT_VERSION)
         self.assertEqual(fields["chatgpt_score"], None)
 
