@@ -22,6 +22,7 @@ REQUEST_TIMEOUT_MS = 4500
 CONTACT_RE = re.compile(r"contact|contact-us|get-in-touch|reach-us", re.I)
 BLOG_RE = re.compile(r"blog|news|journal|articles|stories|updates", re.I)
 PROJECT_RE = re.compile(r"portfolio|projects|case-stud|gallery|our-work|recent-work", re.I)
+REVIEW_PAGE_RE = re.compile(r"service|what-we-do|about|portfolio|projects|case-stud|gallery|our-work|contact", re.I)
 PRIVACY_RE = re.compile(r"privacy", re.I)
 DATE_KEYS = {"datepublished", "datemodified", "datecreated", "lastreviewed"}
 EMAIL_RE = re.compile(r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+", re.I)
@@ -142,6 +143,9 @@ class PageEvidenceParser(HTMLParser):
         self.project_links: list[str] = []
         self.contact_links: list[str] = []
         self.emails: list[str] = []
+        self.images: list[dict] = []
+        self.title = ""
+        self._in_title = False
         self.last_modified: str | None = None
         self._article_depth = 0
         self._article_links: list[str] = []
@@ -155,6 +159,10 @@ class PageEvidenceParser(HTMLParser):
         values = {key.lower(): (value or "") for key, value in attrs}
         if tag == "form":
             self.forms += 1
+        if tag == "title":
+            self._in_title = True
+        if tag == "img" and values.get("src"):
+            self.images.append({"url": urljoin(self.page_url, values["src"]), "alt": values.get("alt", "")[:160]})
         if tag == "article":
             self._article_depth += 1
             if self._article_depth == 1:
@@ -193,6 +201,8 @@ class PageEvidenceParser(HTMLParser):
             self._script_chunks = []
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._in_title = False
         if tag == "a" and self._anchor is not None:
             if self._anchor["text"]:
                 descriptor = f"{self._anchor['href']} {self._anchor['text']}"
@@ -223,6 +233,8 @@ class PageEvidenceParser(HTMLParser):
             self._script_chunks = []
 
     def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title = (self.title + " " + data).strip()[:300]
         self.emails.extend(EMAIL_RE.findall(data))
         if self._anchor is not None:
             self._anchor["text"] = (self._anchor["text"] + " " + data).strip()[:300]
@@ -548,6 +560,7 @@ async def _request_page(context, url: str, public_cache: dict[str, bool], public
         parsed.feed(body)
         return {"url": url, "final_url": final_url, "status": response.status,
                 "redirected": bool(redirect_chain), "redirect_chain": redirect_chain, "form_count": parsed.forms,
+                "title": parsed.title, "images": parsed.images[:100],
         "emails": sorted(set(parsed.emails))[:30],
         "privacy_links": sorted(set(parsed.privacy_links)), "blog_links": sorted(set(parsed.blog_links)),
         "project_links": sorted(set(parsed.project_links)),
@@ -950,6 +963,43 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         "status": "unknown", "content_image_count": 0, "affordance_count": 0,
         "examples": [], "note": "Image enlargement affordance detection was unavailable."}
 
+    # Audit a small sample of linked service, portfolio, about, and contact pages
+    # using static HTML evidence. Homepage screenshots remain the only visual input.
+    page_candidates = [a for a in anchors if _same_site(a.get("href", ""), base_url)
+                       and REVIEW_PAGE_RE.search(a.get("href", "") + " " + a.get("text", ""))
+                       and urlsplit(a.get("href", "")).path not in {"", "/"}]
+    page_candidates.sort(key=lambda a: (not bool(PROJECT_RE.search(a.get("href", "") + " " + a.get("text", ""))),
+                                        not bool(re.search(r"service|about", a.get("href", "") + " " + a.get("text", ""), re.I))))
+    prior_pages = {base_url, *(row.get("final_url") or row.get("url") for row in contact_pages + blog_pages + project_pages)}
+    cross_page_reviews = []
+    for link in page_candidates:
+        url = link.get("href")
+        if not url or url in prior_pages or any(_safe_url(row.get("url", "")) == _safe_url(url) for row in cross_page_reviews):
+            continue
+        parsed_page, error = await _request_page(page.context, url, public_host_cache, public_host_fn, base_url)
+        row = {"source_url": (parsed_page or {}).get("final_url") or url,
+               "status": "reviewed" if parsed_page and not parsed_page.get("error") else "unavailable",
+               "title": (parsed_page or {}).get("title"), "error": error or (parsed_page or {}).get("error"),
+               "form_detected": bool((parsed_page or {}).get("form_count")),
+               "privacy_policy_link_found": bool((parsed_page or {}).get("privacy_links")),
+               "http_links": [], "broken_images": []}
+        if parsed_page and not parsed_page.get("error"):
+            for candidate in parsed_page.get("links", []):
+                target = candidate.get("href", "")
+                if _is_http(target):
+                    row["http_links"].append({"url": target, "ends_on_https": False})
+            image_urls = list(dict.fromkeys(item["url"] for item in parsed_page.get("images", []) if item.get("url")))[:5]
+            async def check_image(image_url):
+                checked_image = await _checked_link(page.context, {"url": image_url, "kind": "image", "internal": _same_site(image_url, base_url)}, public_host_cache, public_host_fn)
+                return {"url": image_url, "status": checked_image.get("status"), "result": checked_image.get("result")}
+            checks = await asyncio.gather(*(check_image(image_url) for image_url in image_urls))
+            row["broken_images"] = [item for item in checks if item.get("result") in {"broken", "request_failed"}]
+            row["image_urls_checked"] = len(image_urls)
+            row["dates"] = parsed_page.get("date_candidates", [])[:10]
+        cross_page_reviews.append(row)
+        if len(cross_page_reviews) >= 3:
+            break
+
     result = {
         "status": "partial" if len(selected) > MAX_LINK_CHECKS or facts.get("pending_images") else "completed",
         "limits": {"max_link_checks": MAX_LINK_CHECKS, "max_lazy_images": MAX_LAZY_IMAGES,
@@ -975,5 +1025,8 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         "copyright_footer_signal": copyright_signal,
         "legacy_twitter_branding": twitter,
         "image_enlargement": image_enlargement,
+        "additional_page_reviews": {"pages_reviewed": len(cross_page_reviews), "page_limit": 3,
+                                     "image_check_limit_per_page": 5, "pages": cross_page_reviews,
+                                     "scope_note": "Bounded static review of up to three linked service, portfolio, about, or contact pages. Images, links, forms, policy-link presence, and available dates are recorded with their page URL; homepage-only visual screenshots and interactive smoke tests are unchanged."},
     }
     return _safe_payload(result)

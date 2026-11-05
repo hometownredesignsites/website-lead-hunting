@@ -127,6 +127,7 @@ def script_audit_summary(candidate: dict) -> dict:
         "copyright_footer_signal": checks.get("copyright_footer_signal", {"status": "not_run"}),
         "legacy_twitter_branding": checks.get("legacy_twitter_branding", {"status": "not_run"}),
         "image_enlargement": checks.get("image_enlargement", {"status": "not_run"}),
+        "additional_page_reviews": checks.get("additional_page_reviews", {"pages_reviewed": 0, "pages": [], "status": "not_run"}),
     }
     return _compact(summary)
 
