@@ -1,10 +1,14 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from PIL import Image
 
 from tools.merge_chatgpt_visual_reviews import merge
-from tools.prepare_chatgpt_visual_review import validate_source_viewport
+from tools.prepare_chatgpt_visual_review import main as prepare_visual_review, validate_source_viewport
 from tools.visual_review_status import classify_attempt
 
 
@@ -45,6 +49,39 @@ class VisualReviewRecoveryTests(unittest.TestCase):
             validate_source_viewport("desktop", 390, 844, Path("mobile.png"))
         with self.assertRaisesRegex(ValueError, "Mobile screenshot appears mismatched"):
             validate_source_viewport("mobile", 1440, 1000, Path("desktop.png"))
+
+    def test_targeted_screenshot_preparation_uses_candidate_page_flow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "run-1"
+            (run_dir / "screenshots").mkdir(parents=True)
+            for viewport, size in (("desktop", (1000, 3200)), ("mobile", (390, 3200))):
+                Image.new("RGB", size, "white").save(run_dir / "screenshots" / f"{viewport}.png")
+            candidate = {
+                "candidate_id": "candidate-1",
+                "screenshots": {
+                    viewport: {"status": "saved", "path": f"screenshots/{viewport}.png"}
+                    for viewport in ("desktop", "mobile")
+                },
+                "visual_page_flow": {
+                    "desktop": {"first_content_image": {"document_y": 1200},
+                                "first_contact_form": {"document_y": 1500}},
+                    "mobile": {"first_content_image": {"document_y": 1300},
+                               "first_contact_form": {"document_y": 1600}},
+                },
+            }
+            (run_dir / "CANDIDATE_LEDGER.jsonl").write_text(
+                json.dumps(candidate) + "\n", encoding="utf-8"
+            )
+            output_dir = root / "prepared"
+            with patch.object(sys, "argv", ["prepare", "--run-dir", str(run_dir),
+                                             "--candidate-id", "candidate-1",
+                                             "--output-dir", str(output_dir)]):
+                self.assertEqual(prepare_visual_review(), 0)
+            manifest = json.loads((output_dir / "input-manifest.json").read_text(encoding="utf-8"))
+            desktop_image = next(item for item in manifest["images"]
+                                 if item["viewport"] == "desktop" and item["view"] == "first_image")
+        self.assertEqual(desktop_image["source_top_px"], 1002)
 
     def test_mismatched_uploaded_screenshots_are_retried_in_a_fresh_session(self):
         decision = classify_attempt(

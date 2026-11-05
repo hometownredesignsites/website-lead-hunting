@@ -167,6 +167,7 @@ def main() -> int:
     output_dir = args.output_dir.resolve()
     candidate = load_candidate(run_dir, args.candidate_id)
     screenshot_record = candidate.get("screenshots") or {}
+    page_flow = script_audit_summary(candidate).get("visual_page_flow") or {}
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
     viewport_crop_heights = {"desktop": 900, "mobile": 844}
