@@ -1,6 +1,6 @@
 # Visual opportunity scoring
 
-This rubric is used by the ChatGPT visual-review workflow. Scripted technical priority remains a separate initial measure. The visual review receives structured script-audit evidence and four screenshot views: desktop and mobile top, plus a mid-page view at 25% of desktop and 48% of mobile scrollable height. Page-flow measurements separately record where the first meaningful image and contact form occur. These four views match the earlier successful ChatGPT image-review setup; the middle crops are representative and are not guaranteed to show a particular semantic section.
+This rubric is used by the ChatGPT visual-review workflow. Scripted technical priority remains a separate initial measure. The visual review receives structured script-audit evidence and four screenshot views: desktop and mobile top, plus a mid-page view at 25% of desktop and 48% of mobile scrollable height. Before assessment, a capture-validation step requires the mid crop to be at least 150 pixels below the top crop, verifies it is not an identical image, and checks measured browser scroll movement on fresh captures. If a distinct mid view cannot be verified, the candidate is marked failed with diagnostics and ChatGPT is not sent duplicate screenshots. Page-flow measurements separately record where the first meaningful image and contact form occur. These four views match the earlier successful ChatGPT image-review setup; the middle crops are representative and are not guaranteed to show a particular semantic section.
 
 ## Required factors
 

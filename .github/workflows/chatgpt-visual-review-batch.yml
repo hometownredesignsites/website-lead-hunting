@@ -244,9 +244,26 @@ jobs:
             --output-dir "artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID/website-review" \
             "${prepare_args[@]}"
 
+      - name: Verify the mid screenshots follow real page scrolling
+        id: validate_scroll
+        if: steps.prepare.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+          RECAPTURE_REQUIRED: ${{ matrix.recapture_screenshots }}
+        run: |
+          REVIEW_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID"
+          validation_args=(--manifest "$REVIEW_DIR/website-review/input-manifest.json")
+          if [[ "$RECAPTURE_REQUIRED" == "true" ]]; then
+            validation_args+=(--recapture-manifest "$REVIEW_DIR/recaptured/recapture-manifest.json")
+          fi
+          python tools/validate_visual_review_captures.py "${validation_args[@]}" \
+            > "$REVIEW_DIR/scroll-validation.log" 2>&1
+
       - name: Assess screenshots with the proven in-session retry behavior
         id: review
-        if: steps.prepare.outcome == 'success'
+        if: steps.prepare.outcome == 'success' && steps.validate_scroll.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
@@ -353,6 +370,7 @@ jobs:
         env:
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
           PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          SCROLL_VALIDATION_OUTCOME: ${{ steps.validate_scroll.outcome }}
           REVIEW_OUTCOME: ${{ steps.review.outputs.status || steps.review.outcome }}
           SOURCE_ARTIFACT_OUTCOME: ${{ steps.source_artifact.outcome }}
         run: |
@@ -366,10 +384,15 @@ jobs:
           result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
           source_available = os.environ.get("SOURCE_ARTIFACT_OUTCOME") == "success"
           preparation_ok = os.environ.get("PREPARE_OUTCOME") == "success"
+          scroll_validation_ok = os.environ.get("SCROLL_VALIDATION_OUTCOME") == "success"
           attempts = []
           for path in sorted((review_dir / "attempts").glob("*/attempt-status.json"), key=lambda p: int(p.parent.name)):
               attempts.append(json.loads(path.read_text(encoding="utf-8")))
-          if attempts:
+          if preparation_ok and not scroll_validation_ok:
+              status = "failed"
+              failure_class = "scroll_capture_not_verified"
+              error = "A distinct mid-page view could not be verified; ChatGPT was not sent duplicate screenshots."
+          elif attempts:
               decision = attempts[-1]
               status = decision["status"]
               failure_class = decision.get("failure_class")

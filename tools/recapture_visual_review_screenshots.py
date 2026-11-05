@@ -22,6 +22,7 @@ VIEWPORTS = {
     "desktop": {"width": 1440, "height": 1000},
     "mobile": {"width": 390, "height": 844},
 }
+MIN_VERIFIED_SCROLL_PX = 150
 
 
 def candidate_url(candidate: dict) -> str:
@@ -82,14 +83,18 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
         # embeds, and background media have a chance to load before full-page capture.
         scroll_step = max(300, int(viewport["height"] * 0.75))
         visited_bottom = False
+        observed_scroll_positions = []
+        max_scroll = 0
         for step_index in range(100):
             height = await page.evaluate(
                 "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
             )
             max_scroll = max(0, int(height) - viewport["height"])
             y = min(max_scroll, scroll_step * step_index)
-            await page.evaluate("y => window.scrollTo(0, y)", y)
+            await page.evaluate("y => window.scrollTo({left: 0, top: y, behavior: 'instant'})", y)
             await page.wait_for_timeout(180)
+            actual_y = int(await page.evaluate("() => window.scrollY"))
+            observed_scroll_positions.append({"requested_y_px": y, "actual_y_px": actual_y})
             if y >= max_scroll:
                 visited_bottom = True
                 break
@@ -113,6 +118,20 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
             "http_status": response.status,
             "final_url": final_url,
             "path": target.name,
+            "scroll_validation": {
+                "method": "window.scrollTo",
+                "max_window_scroll_px": max_scroll,
+                "max_observed_scroll_px": max(
+                    (position["actual_y_px"] for position in observed_scroll_positions),
+                    default=0,
+                ),
+                "minimum_required_scroll_px": MIN_VERIFIED_SCROLL_PX,
+                "verified": max(
+                    (position["actual_y_px"] for position in observed_scroll_positions),
+                    default=0,
+                ) >= MIN_VERIFIED_SCROLL_PX,
+                "positions": observed_scroll_positions,
+            },
         }
     finally:
         await page.close()
