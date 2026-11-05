@@ -36,6 +36,18 @@ class VisualFactorScoringTests(unittest.TestCase):
         result = normalize_and_score(factors)
         self.assertEqual((result["score"], result["verdict"]), (75, "high"))
 
+    def test_absent_hero_floor_adds_independent_factor_points_without_double_counting(self):
+        factors = self.factors()
+        factors["hero_imagery"]["severity"] = "minor"
+        factors["readability"]["severity"] = "minor"
+        result = normalize_and_score(factors, {"hero_media": {"status": "absent"}})
+        self.assertEqual(result["factor_points"]["hero_imagery"], 45)
+        self.assertEqual(result["score"], 50)
+        self.assertEqual(result["verdict"], "medium")
+        factors["hero_imagery"]["severity"] = "severe"
+        result = normalize_and_score(factors, {"hero_media": {"status": "absent"}})
+        self.assertEqual(result["factor_points"]["hero_imagery"], 50)
+
     def test_missing_factor_or_evidence_is_invalid(self):
         factors = self.factors()
         factors.pop("interactions")
@@ -66,13 +78,12 @@ class VisualFactorScoringTests(unittest.TestCase):
         self.assertEqual(set(result["uncertain_factors"]), {"broken_images", "interactions"})
 
     def test_chatgpt_validator_returns_the_fixed_factor_score(self):
-        self._assert_validator_uses_factor_score(validate_chatgpt_review, duckai=False)
+        self._assert_validator_uses_factor_score(validate_chatgpt_review)
 
-    def _assert_validator_uses_factor_score(self, validator, duckai):
-        screenshots = [
-            {"filename": name}
-            for name in ("desktop_top.jpg", "desktop_mid.jpg", "mobile_top.jpg", "mobile_mid.jpg")
-        ]
+    def _assert_validator_uses_factor_score(self, validator):
+        screenshots = [{"filename": name} for name in (
+            "desktop_top.jpg", "desktop_first_image.jpg", "desktop_contact_form.jpg",
+            "mobile_top.jpg", "mobile_first_image.jpg", "mobile_contact_form.jpg")]
         factors = self.factors()
         factors["hero_imagery"]["severity"] = "minor"
         review = {
@@ -80,9 +91,11 @@ class VisualFactorScoringTests(unittest.TestCase):
             "visual_verdict": "pass", "visual_opportunity_score": 49,
             "confidence": "high", "factor_assessments": factors,
             "desktop_top_observations": ["Desktop top checked"],
-            "desktop_mid_observations": ["Desktop middle checked"],
+            "desktop_first_image_observations": ["Desktop first image checked"],
+            "desktop_contact_form_observations": ["Desktop form checked"],
             "mobile_top_observations": ["Mobile top checked"],
-            "mobile_mid_observations": ["Mobile middle checked"],
+            "mobile_first_image_observations": ["Mobile first image checked"],
+            "mobile_contact_form_observations": ["Mobile form checked"],
             "desktop_observations": ["Desktop checked"],
             "mobile_observations": ["Mobile checked"],
             "major_issues": [], "moderate_issue_clusters": [], "severe_issue_clusters": [],
@@ -92,23 +105,13 @@ class VisualFactorScoringTests(unittest.TestCase):
             "candidate_id": "candidate-1", "website_url": "https://example.com",
             "screenshots": screenshots,
             "script_audit": {
+                "hero_media": {"status": "present"},
                 "broken_images": {"status": "clear"},
-                "broken_links_and_interactions": {"status": "clear"},
+                "broken_links_and_interactions": {"status": "clear",
+                    "interactions": {"status": "clear", "tested_count": 1, "findings": []}},
             },
         }
         uploaded = [{"filename": item["filename"], "status": "uploaded"} for item in screenshots]
-        if duckai:
-            context["upload_images"] = [
-                {"filename": "desktop_top.jpg", "covers": ["desktop_top.jpg", "desktop_mid.jpg"]},
-                {"filename": "mobile_top.jpg", "covers": ["mobile_top.jpg", "mobile_mid.jpg"]},
-                {"filename": "desktop_mid.jpg", "covers": []},
-            ]
-            # Duck.ai uploads three composites, so its attachment names and coverage match that contract.
-            context["upload_images"] = context["upload_images"][:2] + [
-                {"filename": "desktop_mid.jpg", "covers": ["mobile_mid.jpg"]}
-            ]
-            uploaded = [{"filename": item["filename"], "status": "uploaded"} for item in context["upload_images"]]
-
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             response_path = root / "response.json"

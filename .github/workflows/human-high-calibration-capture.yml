@@ -8,6 +8,11 @@ on:
         required: true
         default: "human-high-calibration-20261104"
         type: string
+      target_url:
+        description: "Optional: capture one site from the private calibration target list"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -50,6 +55,7 @@ jobs:
       - name: Validate run key and capture same screenshots for both providers
         env:
           CALIBRATION_RUN_KEY: ${{ inputs.calibration_run_key }}
+          CALIBRATION_TARGET_URL: ${{ inputs.target_url }}
           PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         shell: bash
         run: |
@@ -58,9 +64,12 @@ jobs:
             exit 1
           fi
           python -m pip install --disable-pip-version-check -r requirements.txt
-          python tools/capture_human_high_calibration.py \
-            --targets-csv private-results-chatgpt/config/calibration_human_high_targets.csv \
-            --run-dir "runs/$CALIBRATION_RUN_KEY"
+          capture_args=(--targets-csv private-results-chatgpt/config/calibration_human_high_targets.csv \
+            --run-dir "runs/$CALIBRATION_RUN_KEY")
+          if [[ -n "$CALIBRATION_TARGET_URL" ]]; then
+            capture_args+=(--target-url "$CALIBRATION_TARGET_URL")
+          fi
+          python tools/capture_human_high_calibration.py "${capture_args[@]}"
           python tools/private_results.py commit-run --private-repo private-results-chatgpt \
             --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
           python tools/private_results.py commit-run --private-repo private-results-duckai \

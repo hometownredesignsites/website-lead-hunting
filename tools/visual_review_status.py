@@ -12,7 +12,7 @@ RETRY = "retry-needed"
 IDENTITY_ERRORS = (
     "candidate_id does not match the source candidate",
     "website_url does not match the source candidate",
-    "candidate context must list exactly four",
+    "candidate context must list exactly six",
 )
 TRANSIENT_RUNNER_MARKERS = (
     "chatgpt did not confirm all uploaded images",

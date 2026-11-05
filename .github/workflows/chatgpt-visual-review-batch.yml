@@ -185,7 +185,7 @@ jobs:
           run-id: ${{ needs.plan.outputs.source_run_id }}
           path: artifacts/lead-hunt-source/runs/${{ needs.plan.outputs.run_key }}
 
-      - name: Prepare this candidate's four screenshots
+      - name: Prepare this candidate's six targeted screenshots
         id: prepare
         continue-on-error: true
         shell: bash
@@ -239,9 +239,11 @@ jobs:
               --max-settle-wait-seconds 30 \
               --expect-review-score \
               --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
-              --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
+              --image-file "$REVIEW_DIR/website-review/desktop_first_image.jpg" \
+              --image-file "$REVIEW_DIR/website-review/desktop_contact_form.jpg" \
               --image-file "$REVIEW_DIR/website-review/mobile_top.jpg" \
-              --image-file "$REVIEW_DIR/website-review/mobile_mid.jpg" \
+              --image-file "$REVIEW_DIR/website-review/mobile_first_image.jpg" \
+              --image-file "$REVIEW_DIR/website-review/mobile_contact_form.jpg" \
               > "$ATTEMPT_DIR/runner.log" 2>&1 || review_rc=$?
 
           if [[ "$review_rc" -eq 0 ]]; then

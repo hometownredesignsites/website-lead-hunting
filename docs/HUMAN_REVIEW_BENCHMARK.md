@@ -2,7 +2,7 @@
 
 Use the private human-review labels to compare the system's current assessments against the decisions made during interactive review. The `decision` column is the label of record; `markdown_decision` is not substituted when the two disagree. Keep the input labels, notes, and generated benchmark CSV in the private operations repository.
 
-The benchmark utility matches rows by normalized website host and joins the newest `fixed-factors-v2` scorecard from each provider ledger. Legacy issue-cluster scores and v1 scorecards are excluded so they are not compared with the current rubric. A candidate can match by host while its provider assessment remains `not_assessed` until it has a current-version factor scorecard. A validated assessment with missing required evidence is reported as `uncertain`, not as a numeric score.
+The benchmark utility matches rows by normalized website host and joins the newest versioned factor scorecard from each provider ledger. Legacy issue-cluster scores and older factor versions are excluded so they are not compared with the current rubric. A candidate can match by host while its provider assessment remains `not_assessed` until it has a current-version factor scorecard. A validated assessment with missing required evidence is reported as `uncertain`, not as a numeric score. The ChatGPT v3 rubric applies a 45-point floor for a script-confirmed absent first-view hero; there is no post-evaluation provider-specific score weighting.
 
 ```powershell
 python tools/build_human_review_benchmark.py `

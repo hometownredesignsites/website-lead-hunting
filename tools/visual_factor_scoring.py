@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v2"
+ASSESSMENT_VERSION = "fixed-factors-v3"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -94,8 +94,8 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
     return factors
 
 
-def normalize_and_score(factors: dict) -> dict:
-    """Validate required evidence and compute a score from factor severity only."""
+def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
+    """Validate factor evidence and score named issues, with a deterministic absent-hero floor."""
     normalized = {}
     errors = []
     uncertain = []
@@ -128,6 +128,17 @@ def normalize_and_score(factors: dict) -> dict:
         return {"errors": errors, "factors": normalized, "score": None, "verdict": "uncertain", "uncertain_factors": uncertain}
     if uncertain:
         return {"errors": [], "factors": normalized, "score": None, "verdict": "uncertain", "uncertain_factors": uncertain}
-    score = min(100, sum(SEVERITY_POINTS[item["severity"]] for item in normalized.values()))
+    points = {key: SEVERITY_POINTS[item["severity"]] for key, item in normalized.items()}
+    hero = (audit or {}).get("hero_media") or {}
+    hero_status = str(hero.get("status", "unknown")).casefold()
+    hero_absence_points = 45 if hero_status == "absent" else 0
+    if hero_absence_points:
+        # The missing first-view image/video is one named issue. It replaces a
+        # weaker model rating for that same root cause and never double-counts it.
+        points["hero_imagery"] = max(points.get("hero_imagery", 0), hero_absence_points)
+    score = min(100, sum(points.values()))
     verdict = "pass" if score < 50 else "medium" if score < 75 else "high"
-    return {"errors": [], "factors": normalized, "score": score, "verdict": verdict, "uncertain_factors": []}
+    return {"errors": [], "factors": normalized, "factor_points": points,
+            "hero_media_absence_points": hero_absence_points,
+            "hero_media_status": hero_status,
+            "score": score, "verdict": verdict, "uncertain_factors": []}

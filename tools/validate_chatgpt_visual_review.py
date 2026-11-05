@@ -17,6 +17,10 @@ SECTION_KEYS = {
     "desktop mid observations": "desktop_mid_observations",
     "mobile top observations": "mobile_top_observations",
     "mobile mid observations": "mobile_mid_observations",
+    "desktop first-image observations": "desktop_first_image_observations",
+    "mobile first-image observations": "mobile_first_image_observations",
+    "desktop contact-form observations": "desktop_contact_form_observations",
+    "mobile contact-form observations": "mobile_contact_form_observations",
     "desktop observations": "desktop_observations",
     "mobile observations": "mobile_observations",
     "major issues": "major_issues",
@@ -147,7 +151,7 @@ def main() -> int:
         factors = parse_factor_assessments(response_text, review)
         audit = context.get("script_audit") or {}
         enforce_script_audit_evidence(factors, audit)
-        scorecard = normalize_and_score(factors)
+        scorecard = normalize_and_score(factors, audit)
         review["factor_assessments"] = scorecard["factors"]
         errors.extend(scorecard["errors"])
         review["model_reported_visual_opportunity_score"] = model_score
@@ -156,8 +160,10 @@ def main() -> int:
         review["visual_verdict"] = scorecard["verdict"]
         review["score_calibration"] = {
             "version": ASSESSMENT_VERSION,
-            "method": "sum of five fixed factor severities: none=0, minor=5, moderate=25, severe=50; capped at 100",
-            "factor_points": {key: {"severity": value["severity"], "points": {"none": 0, "minor": 5, "moderate": 25, "severe": 50}.get(value["severity"])} for key, value in scorecard["factors"].items()},
+            "method": "sum factor points; confirmed first-viewport hero-media absence is at least 45 points (replaces weaker points for that same factor); none=0, minor=5, moderate=25, severe=50; capped at 100",
+            "factor_points": {key: {"severity": scorecard["factors"][key]["severity"], "points": value} for key, value in scorecard.get("factor_points", {}).items()},
+            "hero_media_status": scorecard.get("hero_media_status"),
+            "hero_media_absence_points": scorecard.get("hero_media_absence_points", 0),
             "uncertain_factors": scorecard["uncertain_factors"],
         }
         review["raw_model_response"] = response_text
@@ -175,8 +181,9 @@ def main() -> int:
             errors.append("confidence is not an allowed value")
         review["script_audit_evidence"] = context.get("script_audit", {"status": "not_available"})
         array_fields = (
-            "desktop_top_observations", "desktop_mid_observations",
-            "mobile_top_observations", "mobile_mid_observations",
+            "desktop_top_observations", "mobile_top_observations",
+            "desktop_first_image_observations", "mobile_first_image_observations",
+            "desktop_contact_form_observations", "mobile_contact_form_observations",
             "desktop_observations", "mobile_observations", "major_issues",
             "moderate_issue_clusters", "severe_issue_clusters",
             "positive_signals", "recommended_redesign_focus", "limitations",
@@ -184,15 +191,16 @@ def main() -> int:
         for key in array_fields:
             if not isinstance(review.get(key), list) or not all(isinstance(item, str) for item in review.get(key, [])):
                 errors.append(f"{key} must be an array of strings")
-        for key in ("desktop_top_observations", "desktop_mid_observations",
-                    "mobile_top_observations", "mobile_mid_observations",
+        for key in ("desktop_top_observations", "mobile_top_observations",
+                    "desktop_first_image_observations", "mobile_first_image_observations",
+                    "desktop_contact_form_observations", "mobile_contact_form_observations",
                     "desktop_observations", "mobile_observations"):
             if not review.get(key):
                 errors.append(f"{key} must be non-empty")
     if uploaded_names != expected_names or len(attachment_records) != len(expected_names):
-        errors.append("all expected desktop/mobile top and mid screenshots were not confirmed uploaded")
-    if len(expected_names) != 4:
-        errors.append("candidate context must list exactly four top/mid desktop/mobile screenshots")
+        errors.append("all expected desktop/mobile top, first-image, and contact-form screenshots were not confirmed uploaded")
+    if len(expected_names) != 6:
+        errors.append("candidate context must list exactly six desktop/mobile top, first-image, and contact-form screenshots")
 
     result = {
         "status": "passed" if not errors else "failed",

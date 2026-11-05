@@ -16,8 +16,10 @@ from playwright.async_api import async_playwright
 
 try:
     from .site_audit import PageObserver, load_lazy_images, run_site_checks
+    from .page_flow import inspect_page_flow
 except ImportError:
     from site_audit import PageObserver, load_lazy_images, run_site_checks
+    from page_flow import inspect_page_flow
 
 
 def now_iso() -> str:
@@ -78,7 +80,8 @@ async def capture(page, url: str, path: Path, width: int, height: int) -> dict:
                 screenshot.crop((0, 0, width, screenshot.height)).save(path)
     return {"status": "saved", "path": path.resolve().relative_to(Path.cwd().resolve()).as_posix(), "mode": mode,
             "http_status": response.status if response else None,
-            "final_url": page.url, "viewport": {"width": width, "height": height}}
+            "final_url": page.url, "viewport": {"width": width, "height": height},
+            "page_flow": await inspect_page_flow(page)}
 
 
 async def capture_run(args) -> int:
@@ -86,6 +89,12 @@ async def capture_run(args) -> int:
     screenshots_dir = run_dir / "screenshots"
     screenshots_dir.mkdir(parents=True, exist_ok=True)
     targets = list(csv.DictReader(args.targets_csv.open(encoding="utf-8-sig", newline="")))
+    if args.target_url:
+        requested_host = (urlsplit(args.target_url.strip()).hostname or "").lower().removeprefix("www.")
+        targets = [row for row in targets
+                   if (urlsplit((row.get("website") or "").strip()).hostname or "").lower().removeprefix("www.") == requested_host]
+        if len(targets) != 1:
+            raise ValueError(f"--target-url must match exactly one private calibration target; matched {len(targets)}")
     if not targets:
         raise ValueError("Calibration target CSV has no rows")
     candidates = []
@@ -107,7 +116,8 @@ async def capture_run(args) -> int:
                       "configured_location": location, "region": "Colorado",
                       "domain": host, "canonical_url": url, "final_url": url,
                       "site_title": "", "site_check_status": "error",
-                      "screenshots": {}, "site_checks": {"status": "not_run"}}
+                      "screenshots": {}, "site_checks": {"status": "not_run"},
+                      "visual_page_flow": {}}
             desktop_context = await browser.new_context(ignore_https_errors=False,
                 viewport={"width": 1440, "height": 1000})
             mobile_context = await browser.new_context(ignore_https_errors=False,
@@ -132,6 +142,7 @@ async def capture_run(args) -> int:
             observer = PageObserver(desktop_page)
             try:
                 record["screenshots"]["desktop"] = await capture(desktop_page, url, desktop_path, 1440, 1000)
+                record["visual_page_flow"]["desktop"] = record["screenshots"]["desktop"]["page_flow"]
                 title = await desktop_page.title()
                 final_url = desktop_page.url
                 final_host = (urlsplit(final_url).hostname or "").lower()
@@ -147,6 +158,15 @@ async def capture_run(args) -> int:
                     record["site_checks"] = {"status": "unknown",
                         "error": f"{type(audit_error).__name__}: {audit_error}"[:500]}
                 record["screenshots"]["mobile"] = await capture(mobile_page, final_url, mobile_path, 390, 844)
+                record["visual_page_flow"]["mobile"] = record["screenshots"]["mobile"]["page_flow"]
+                hero_by_view = {key: value.get("hero_media", {})
+                                for key, value in record["visual_page_flow"].items()}
+                statuses = [item.get("status") for item in hero_by_view.values()]
+                overall = ("uncertain" if "uncertain" in statuses else
+                           "absent" if "absent" in statuses else
+                           "present" if "present" in statuses else "uncertain")
+                record["hero_media"] = {"status": overall, "trigger_views": [key for key, value in hero_by_view.items()
+                    if value.get("status") in {"absent", "uncertain"}], **hero_by_view}
                 record.update({"site_check_status": "loaded", "site_title": title,
                                "final_url": final_url, "domain": final_host or host,
                                "human_review": {"decision": "high", "basis": "provided human review cohort"}})
@@ -177,6 +197,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--targets-csv", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--target-url", help="Optional website URL that must match exactly one row in the private targets CSV")
     return asyncio.run(capture_run(parser.parse_args()))
 
 

@@ -19,8 +19,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 if __package__:
     from .site_audit import PageObserver, load_lazy_images, run_site_checks
+    from .page_flow import inspect_page_flow
 else:  # Supports the workflow's direct `python tools/lead_hunt.py` invocation.
     from site_audit import PageObserver, load_lazy_images, run_site_checks
+    from page_flow import inspect_page_flow
 
 
 
@@ -601,6 +603,7 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
         metrics["title"] = await page.title()
         image_loading = await load_lazy_images(page)
         metrics["desktop"] = await page_metrics(page)
+        metrics["desktop"]["pageFlow"] = await inspect_page_flow(page)
         if logger:
             logger.emit("direct_site_navigation_completed", query_index=query.get("query_index"),
                         domain=requested_host, final_domain=final_host,
@@ -614,6 +617,7 @@ async def assess_site(page, result: dict, query: dict, run_dir: Path,
         await page.set_viewport_size({"width": 390, "height": 844})
         await page.wait_for_timeout(350)
         metrics["mobile"] = await page_metrics(page)
+        metrics["mobile"]["pageFlow"] = await inspect_page_flow(page)
         mobile = await screenshot_with_fallback(page, run_dir / "screenshots" / f"{stem}_mobile.png", 25000,
                                                 logger=logger, stage="mobile")
         shots["mobile"] = mobile

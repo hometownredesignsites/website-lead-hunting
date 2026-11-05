@@ -135,7 +135,7 @@ def run_stage_once(
                     followup_before_last_text = ""
             if followup_reason == "empty_response":
                 followup_prompt = (
-                    "Your previous response was empty. Please retry the visual assessment using the four "
+                    "Your previous response was empty. Please retry the visual assessment using the six "
                     "screenshots already attached and the candidate context in this chat. Follow the original "
                     "rubric and output format. Include the explicit score, verdict, confidence, and labeled "
                     "observation sections. Return the concise plain-text scorecard without a preamble."
@@ -143,7 +143,7 @@ def run_stage_once(
             else:
                 followup_prompt = (
                     "Your previous response did not include the required explicit scorecard. Please retry the "
-                    "visual assessment using the four screenshots already attached and the candidate context "
+                    "visual assessment using the six screenshots already attached and the candidate context "
                     "in this chat. Follow the original rubric and output format, include the labeled score, "
                     "verdict, confidence, observation sections, and all five factor assessments with severity, "
                     "specific evidence, and the prescribed source label. Use the factor names Hero imagery, "
