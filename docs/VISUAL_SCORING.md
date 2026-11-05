@@ -1,6 +1,6 @@
 # Visual opportunity scoring
 
-This rubric is used by the ChatGPT visual-review workflow. Scripted technical priority remains a separate initial measure. The visual review receives structured script-audit evidence and six targeted screenshot views: desktop and mobile top, first meaningful image, and contact form. Page-flow measurements record where the first meaningful image and first form occur. Missing targets use documented fallback crops.
+This rubric is used by the ChatGPT visual-review workflow. Scripted technical priority remains a separate initial measure. The visual review receives structured script-audit evidence and four screenshot views: desktop and mobile top, plus a mid-page view at 25% of desktop and 48% of mobile scrollable height. Page-flow measurements separately record where the first meaningful image and contact form occur. These four views match the earlier successful ChatGPT image-review setup; the middle crops are representative and are not guaranteed to show a particular semantic section.
 
 ## Required factors
 

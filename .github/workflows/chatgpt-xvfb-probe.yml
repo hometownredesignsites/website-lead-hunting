@@ -14,7 +14,7 @@ on:
         default: false
         type: boolean
       review_saved_candidate:
-        description: "Score six targeted desktop and mobile website screenshots"
+        description: "Score four desktop and mobile website screenshots"
         required: true
         default: false
         type: boolean
@@ -158,11 +158,9 @@ jobs:
             image_args+=(--image-file artifacts/chatgpt-xvfb-probe/image-probe.png)
           elif [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then
             image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop_top.jpg)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop_first_image.jpg)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop_contact_form.jpg)
+            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/desktop_mid.jpg)
             image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile_top.jpg)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile_first_image.jpg)
-            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile_contact_form.jpg)
+            image_args+=(--image-file artifacts/chatgpt-xvfb-probe/website-review/mobile_mid.jpg)
           fi
           context_args=()
           if [[ "$REVIEW_SAVED_CANDIDATE" == "true" ]]; then

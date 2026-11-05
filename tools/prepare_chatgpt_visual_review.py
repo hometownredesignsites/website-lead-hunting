@@ -171,6 +171,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
     viewport_crop_heights = {"desktop": 900, "mobile": 844}
+    mid_page_scroll_fractions = {"desktop": 0.25, "mobile": 0.48}
     for viewport in ("desktop", "mobile"):
         record = screenshot_record.get(viewport) or {}
         if record.get("status") != "saved" or not record.get("path"):
@@ -186,20 +187,11 @@ def main() -> int:
             crop_height = min(viewport_crop_heights[viewport], image.height)
             max_scroll = max(0, image.height - crop_height)
             flow = page_flow.get(viewport) or {}
-            first_image = flow.get("first_content_image") or {}
-            contact_form = flow.get("first_contact_form") or {}
-            fallback_fraction = {"desktop": 0.35, "mobile": 0.60}[viewport]
-            def crop_top(item: dict, fallback: float) -> tuple[int, str]:
-                y = item.get("document_y")
-                if isinstance(y, (int, float)):
-                    return max(0, min(max_scroll, round(y - crop_height * 0.22))), "script-measured page position"
-                return round(max_scroll * fallback), f"fallback crop at {fallback:.0%} of scrollable page"
-            first_top, first_note = crop_top(first_image, fallback_fraction)
-            form_top, form_note = crop_top(contact_form, 0.70 if viewport == "desktop" else 0.78)
+            mid_fraction = mid_page_scroll_fractions[viewport]
             view_positions = {
                 "top": (0, "top viewport crop from saved full-page screenshot"),
-                "first_image": (first_top, first_note),
-                "contact_form": (form_top, form_note),
+                "mid": (round(max_scroll * mid_fraction),
+                       f"viewport crop at {mid_fraction:.0%} of the scrollable page"),
             }
             for view, (top, crop_note) in view_positions.items():
                 target = output_dir / f"{viewport}_{view}.jpg"
@@ -233,11 +225,11 @@ def main() -> int:
                         for item in images],
     }
     instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
-Use the six supplied screenshots: desktop_top.jpg, desktop_first_image.jpg, desktop_contact_form.jpg, mobile_top.jpg, mobile_first_image.jpg, and mobile_contact_form.jpg. Crops target script-measured first meaningful content imagery and the first contact form when available; metadata identifies fallback crops. A structured script audit is also supplied. Treat it as automated evidence, not as something visually verified. Use screenshots and page-flow measurements for hero imagery, readability, and layout/mobile use. Use script audit evidence only for broken images and interactions. Keep evidence sources explicit and never describe an automated finding as visually observed. Do not browse the site or infer facts not shown in the screenshots or audit. If a required factor cannot be assessed from its evidence source, mark it not_assessable; the durable result will be uncertain instead of silently lowering the score. A separate model-level uncertain verdict does not make otherwise complete factor evidence unassessable; rate each factor from its evidence and let the validator calculate the final result.
+Use only the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page; the mid views are viewport crops taken at 25% of the desktop and 48% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. A structured script audit is also supplied. Treat it as automated evidence, not as something visually verified. Use screenshots and page-flow measurements for hero imagery, readability, and layout/mobile use. Use script audit evidence only for broken images and interactions. Keep evidence sources explicit and never describe an automated finding as visually observed. Do not browse the site or infer facts not shown in the screenshots or audit. If a required factor cannot be assessed from its evidence source, mark it not_assessable; the durable result will be uncertain instead of silently lowering the score. A separate model-level uncertain verdict does not make otherwise complete factor evidence unassessable; rate each factor from its evidence and let the validator calculate the final result.
 
 Rate these five fixed factors, using exactly one severity per factor: none, minor, moderate, severe, or not_assessable. Give concise specific evidence and identify the evidence source. Factors: hero_imagery (screenshots), readability (screenshots), layout_mobile (screenshots), broken_images (script_audit), interactions (script_audit). Do not create extra scoring factors or count issue sentences. Python calculates points from named factors: none=0, minor=5, moderate=25, severe=50. When the script confirms no prominent image/video/background image in the first viewport, hero imagery receives at least 45 points; this replaces weaker points for that same issue. Independently evidenced issues in other factors add points. The total is capped at 100. Verdict bands are pass 0-49, medium 50-74, high 75-100. `not_assessable` in any required factor makes the durable verdict uncertain with a null score. Missing factor entries or evidence make the scorecard invalid and trigger retry. Report your own score and verdict separately; they are retained only as model output.
 
-Use none when the factor is supported and no material weakness is present. Use minor for polish with little user impact; moderate for a clear redesign need or bounded user impact; severe for an obvious, prominent defect that substantially harms readability, trust, visual presentation, navigation, or ability to use the site. Evaluate the website as a potential redesign lead, not only as a technically functional page. For hero imagery, assess whether the first viewport has a compelling, relevant image/video that establishes the business and supports the headline or CTA. When script evidence confirms hero media is absent, identify that as script evidence and assess the text-only first view in the top screenshots; the deterministic 45-point floor applies. Use first-image crops and page-flow measurements to report how far users scroll before meaningful project imagery appears. For readability, check contrast and legibility, including text over images and text inside cards. For layout/mobile use, assess hierarchy, clutter, consistency, whether the design looks materially dated or amateurish, mobile clipping/overlap, and the presentation of the visible portfolio. Inspect contact-form crops for clipped labels/options, controls, and spacing. Assess detached controls near navigation only when their position is visibly inconsistent with the layout. Do not count the same root cause twice; do not treat style preference as evidence by itself or infer image quality from code.
+Use none when the factor is supported and no material weakness is present. Use minor for polish with little user impact; moderate for a clear redesign need or bounded user impact; severe for an obvious, prominent defect that substantially harms readability, trust, visual presentation, navigation, or ability to use the site. Evaluate the website as a potential redesign lead, not only as a technically functional page. For hero imagery, assess whether the first viewport has a compelling, relevant image/video that establishes the business and supports the headline or CTA. When script evidence confirms hero media is absent, identify that as script evidence and assess the text-only first view in the top screenshots; the deterministic 45-point floor applies. Use mid-view crops and page-flow measurements to report how far users scroll before meaningful project imagery appears. For readability, check contrast and legibility, including text over images and text inside cards. For layout/mobile use, assess hierarchy, clutter, consistency, whether the design looks materially dated or amateurish, mobile clipping/overlap, and the presentation of the visible portfolio. Assess detached controls near navigation only when their position is visibly inconsistent with the layout. Do not count the same root cause twice; do not treat style preference as evidence by itself or infer image quality from code.
 
 For broken-image audit evidence, distinguish a confirmed site image failure from browser-policy or measurement artifacts. A cross-origin/ORB block, ERR_ABORTED, empty image URL, tracking pixel, or third-party social icon failure alone does not establish that customer-facing site imagery is broken. Use the URL, failure reason, alt text, and screenshot context; rate only material failures to imagery users need to view. If the script evidence cannot distinguish a site defect from a capture/browser limitation, mark the factor not_assessable rather than treating every failed request as a broken site image. For interactions, a script audit status of not_applicable with zero tested controls means no safe menu/tab/disclosure control was found to test; do not claim a control was tested or broken.
 
@@ -255,16 +247,12 @@ Verdict: <high|medium|pass|uncertain>
 Confidence: <low|medium|high>
 Desktop top observations:
 - <one concise observation tied to desktop_top.jpg>
-Desktop first-image observations:
-- <one concise observation tied to desktop_first_image.jpg and page-flow evidence>
-Desktop contact-form observations:
-- <one concise observation tied to desktop_contact_form.jpg>
+Desktop mid observations:
+- <one concise observation tied to desktop_mid.jpg and page-flow evidence>
 Mobile top observations:
 - <one concise observation tied to mobile_top.jpg>
-Mobile first-image observations:
-- <one concise observation tied to mobile_first_image.jpg and page-flow evidence>
-Mobile contact-form observations:
-- <one concise observation tied to mobile_contact_form.jpg>
+Mobile mid observations:
+- <one concise observation tied to mobile_mid.jpg and page-flow evidence>
 Desktop observations:
 - <summary across both desktop views>
 Mobile observations:
@@ -288,7 +276,7 @@ Layout and mobile use: <none|minor|moderate|severe|not_assessable> — <evidence
 Broken images: <none|minor|moderate|severe|not_assessable> — <evidence; source=script_audit>
 Interactions: <none|minor|moderate|severe|not_assessable> — <evidence; source=script_audit>
 Use at least one concise bullet in every section. Do not add a preamble. Keep the explicit score and verdict near the top. The Python workflow will normalize this labeled response into JSON. Do not claim a check succeeded unless the screenshots show that evidence."""
-    prompt = ("Assess the six supplied screenshots and structured audit using the five fixed factors and rubric. "
+    prompt = ("Assess the four supplied screenshots and structured audit using the five fixed factors and rubric. "
               "Match filenames to viewport/view names. The script audit is the evidence source for broken_images and interactions only; do not describe it as visually observed. "
               "Return the concise labeled text format requested in the instructions.\n\n"
               "STRUCTURED SCRIPT AUDIT (automated evidence; separate from visual scoring):\n"

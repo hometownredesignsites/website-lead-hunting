@@ -6,8 +6,8 @@ and save response and browser diagnostics.
 The response-submission, wait/settle, and same-session retry flow is implemented
 in `chatgpt_file_playwright_anonymous_ci.py` and `stage_runner.py`. The lead-hunt
 workflow invokes it once per pending category/city query under Xvfb. The visual
-review workflow invokes it once per candidate and attaches six targeted desktop/mobile
-screenshots: top, first meaningful image, and contact form. The scheduled retry workflow can
+review workflow invokes it once per candidate and attaches four desktop/mobile top and
+mid-page screenshots. The scheduled retry workflow can
 start a later job with a fresh browser profile for recoverable outcomes; it does
 not replace the runner's in-session retry.
 

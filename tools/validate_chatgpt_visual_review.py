@@ -181,9 +181,8 @@ def main() -> int:
             errors.append("confidence is not an allowed value")
         review["script_audit_evidence"] = context.get("script_audit", {"status": "not_available"})
         array_fields = (
-            "desktop_top_observations", "mobile_top_observations",
-            "desktop_first_image_observations", "mobile_first_image_observations",
-            "desktop_contact_form_observations", "mobile_contact_form_observations",
+            "desktop_top_observations", "desktop_mid_observations",
+            "mobile_top_observations", "mobile_mid_observations",
             "desktop_observations", "mobile_observations", "major_issues",
             "moderate_issue_clusters", "severe_issue_clusters",
             "positive_signals", "recommended_redesign_focus", "limitations",
@@ -191,16 +190,17 @@ def main() -> int:
         for key in array_fields:
             if not isinstance(review.get(key), list) or not all(isinstance(item, str) for item in review.get(key, [])):
                 errors.append(f"{key} must be an array of strings")
-        for key in ("desktop_top_observations", "mobile_top_observations",
-                    "desktop_first_image_observations", "mobile_first_image_observations",
-                    "desktop_contact_form_observations", "mobile_contact_form_observations",
+        for key in ("desktop_top_observations", "desktop_mid_observations",
+                    "mobile_top_observations", "mobile_mid_observations",
                     "desktop_observations", "mobile_observations"):
             if not review.get(key):
                 errors.append(f"{key} must be non-empty")
     if uploaded_names != expected_names or len(attachment_records) != len(expected_names):
-        errors.append("all expected desktop/mobile top, first-image, and contact-form screenshots were not confirmed uploaded")
-    if len(expected_names) != 6:
-        errors.append("candidate context must list exactly six desktop/mobile top, first-image, and contact-form screenshots")
+        errors.append("all expected desktop/mobile top and mid screenshots were not confirmed uploaded")
+    if len(expected_names) != 4 or expected_names != {
+        "desktop_top.jpg", "desktop_mid.jpg", "mobile_top.jpg", "mobile_mid.jpg"
+    }:
+        errors.append("candidate context must list exactly the four desktop/mobile top and mid screenshots")
 
     result = {
         "status": "passed" if not errors else "failed",

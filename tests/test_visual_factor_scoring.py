@@ -82,8 +82,7 @@ class VisualFactorScoringTests(unittest.TestCase):
 
     def _assert_validator_uses_factor_score(self, validator):
         screenshots = [{"filename": name} for name in (
-            "desktop_top.jpg", "desktop_first_image.jpg", "desktop_contact_form.jpg",
-            "mobile_top.jpg", "mobile_first_image.jpg", "mobile_contact_form.jpg")]
+            "desktop_top.jpg", "desktop_mid.jpg", "mobile_top.jpg", "mobile_mid.jpg")]
         factors = self.factors()
         factors["hero_imagery"]["severity"] = "minor"
         review = {
@@ -91,11 +90,9 @@ class VisualFactorScoringTests(unittest.TestCase):
             "visual_verdict": "pass", "visual_opportunity_score": 49,
             "confidence": "high", "factor_assessments": factors,
             "desktop_top_observations": ["Desktop top checked"],
-            "desktop_first_image_observations": ["Desktop first image checked"],
-            "desktop_contact_form_observations": ["Desktop form checked"],
+            "desktop_mid_observations": ["Desktop mid checked"],
             "mobile_top_observations": ["Mobile top checked"],
-            "mobile_first_image_observations": ["Mobile first image checked"],
-            "mobile_contact_form_observations": ["Mobile form checked"],
+            "mobile_mid_observations": ["Mobile mid checked"],
             "desktop_observations": ["Desktop checked"],
             "mobile_observations": ["Mobile checked"],
             "major_issues": [], "moderate_issue_clusters": [], "severe_issue_clusters": [],

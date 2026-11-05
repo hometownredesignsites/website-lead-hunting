@@ -79,9 +79,15 @@ class VisualReviewRecoveryTests(unittest.TestCase):
                                              "--output-dir", str(output_dir)]):
                 self.assertEqual(prepare_visual_review(), 0)
             manifest = json.loads((output_dir / "input-manifest.json").read_text(encoding="utf-8"))
-            desktop_image = next(item for item in manifest["images"]
-                                 if item["viewport"] == "desktop" and item["view"] == "first_image")
-        self.assertEqual(desktop_image["source_top_px"], 1002)
+            self.assertEqual({item["filename"] for item in manifest["images"]}, {
+                "desktop_top.jpg", "desktop_mid.jpg", "mobile_top.jpg", "mobile_mid.jpg"
+            })
+            desktop_mid = next(item for item in manifest["images"]
+                               if item["viewport"] == "desktop" and item["view"] == "mid")
+            mobile_mid = next(item for item in manifest["images"]
+                              if item["viewport"] == "mobile" and item["view"] == "mid")
+        self.assertEqual(desktop_mid["source_top_px"], 575)
+        self.assertEqual(mobile_mid["source_top_px"], 1131)
 
     def test_mismatched_uploaded_screenshots_are_retried_in_a_fresh_session(self):
         decision = classify_attempt(
