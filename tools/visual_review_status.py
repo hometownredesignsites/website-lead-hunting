@@ -49,9 +49,11 @@ def classify_attempt(
 ) -> dict:
     """Return a durable status and whether another fresh-session attempt is useful.
 
-    Missing source files and invalid candidate identity are deterministic input or
-    integrity failures. ChatGPT transport, blank/invalid output, and image-upload
-    confirmation failures can recover in a clean browser session.
+    Missing source files, invalid candidate identity, and recognized permanent
+    setup errors are deterministic failures. ChatGPT transport, blank/invalid
+    output, image-upload confirmation failures, and unclassified runner exits
+    are retried in a bounded fresh browser session because the underlying cause
+    may be transient and the retry queue caps repeated attempts.
     """
     if not source_artifact_available:
         return {"status": FAIL, "retryable": False,
@@ -108,6 +110,7 @@ def classify_attempt(
                 "error": (f"Runner reported a transient failure ({transient_marker})."
                           if transient_marker else
                           f"Runner was interrupted or timed out (exit {process_exit_code}).")}
-    return {"status": FAIL, "retryable": False,
-            "failure_class": "nonrecoverable_runner_error",
-            "error": f"Runner exited with status {process_exit_code} without a recognized recoverable failure."}
+    return {"status": RETRY, "retryable": True,
+            "failure_class": "unclassified_runner_failure",
+            "error": (f"Runner exited with status {process_exit_code} without a recognized "
+                      "permanent or recoverable diagnostic; a bounded fresh-session retry is warranted.")}
