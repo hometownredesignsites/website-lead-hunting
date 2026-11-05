@@ -60,6 +60,15 @@ class VisualFactorScoringTests(unittest.TestCase):
         factors["interactions"]["source"] = "screenshots"
         self.assertTrue(normalize_and_score(factors)["errors"])
 
+    def test_visual_factors_accept_page_flow_as_supplementary_evidence(self):
+        parsed = parse_factor_assessments(
+            "Hero imagery: assessed (moderate) — The mid image follows the page scroll. "
+            "Source=screenshots and page-flow measurements.",
+            {},
+        )
+        self.assertEqual(parsed["hero_imagery"]["source"], "screenshots")
+        self.assertIn("page scroll", parsed["hero_imagery"]["evidence"])
+
     def test_incomplete_script_checks_cannot_be_scored_as_clean(self):
         factors = self.factors()
         audit = {

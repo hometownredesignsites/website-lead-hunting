@@ -48,7 +48,8 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
         # harmless formatting while keeping the tag anchored at the end so
         # arbitrary prose cannot satisfy the source requirement.
         source_match = re.search(
-            r"\s*;?\s*source\s*=\s*(screenshots|script_audit|screenshots_and_script_audit)\s*[.,;:!?]*\s*$",
+            r"\s*;?\s*source\s*=\s*(screenshots|script_audit|screenshots_and_script_audit)"
+            r"(?:\s+and\s+page[- ]flow measurements)?\s*[.,;:!?]*\s*$",
             evidence,
             flags=re.I,
         )
