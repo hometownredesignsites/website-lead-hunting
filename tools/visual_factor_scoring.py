@@ -43,8 +43,15 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
         key = label_to_key[match.group("label").casefold()]
         evidence_end = matches[index + 1].start() if index + 1 < len(matches) else len(response_text)
         evidence = response_text[match.end():evidence_end].strip()
-        source_match = re.search(r"\s*;?\s*source=(screenshots|script_audit|screenshots_and_script_audit)\s*$",
-                                 evidence, flags=re.I)
+        # Model responses often add sentence punctuation after the required
+        # source tag (for example, ``Source=screenshots.``). Accept that
+        # harmless formatting while keeping the tag anchored at the end so
+        # arbitrary prose cannot satisfy the source requirement.
+        source_match = re.search(
+            r"\s*;?\s*source\s*=\s*(screenshots|script_audit|screenshots_and_script_audit)\s*[.,;:!?]*\s*$",
+            evidence,
+            flags=re.I,
+        )
         source = source_match.group(1).casefold() if source_match else None
         if source_match:
             evidence = evidence[:source_match.start()].strip()
