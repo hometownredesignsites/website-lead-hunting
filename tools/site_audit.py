@@ -145,6 +145,7 @@ class PageEvidenceParser(HTMLParser):
         self.emails: list[str] = []
         self.images: list[dict] = []
         self.title = ""
+        self.text_chars = 0
         self._in_title = False
         self.last_modified: str | None = None
         self._article_depth = 0
@@ -233,6 +234,7 @@ class PageEvidenceParser(HTMLParser):
             self._script_chunks = []
 
     def handle_data(self, data: str) -> None:
+        self.text_chars += len(data.strip())
         if self._in_title:
             self.title = (self.title + " " + data).strip()[:300]
         self.emails.extend(EMAIL_RE.findall(data))
@@ -561,6 +563,7 @@ async def _request_page(context, url: str, public_cache: dict[str, bool], public
         return {"url": url, "final_url": final_url, "status": response.status,
                 "redirected": bool(redirect_chain), "redirect_chain": redirect_chain, "form_count": parsed.forms,
                 "title": parsed.title, "images": parsed.images[:100],
+                "text_chars": parsed.text_chars,
         "emails": sorted(set(parsed.emails))[:30],
         "privacy_links": sorted(set(parsed.privacy_links)), "blog_links": sorted(set(parsed.blog_links)),
         "project_links": sorted(set(parsed.project_links)),
@@ -979,15 +982,27 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         parsed_page, error = await _request_page(page.context, url, public_host_cache, public_host_fn, base_url)
         row = {"source_url": (parsed_page or {}).get("final_url") or url,
                "status": "reviewed" if parsed_page and not parsed_page.get("error") else "unavailable",
+               "evidence_source": "static_html",
                "title": (parsed_page or {}).get("title"), "error": error or (parsed_page or {}).get("error"),
                "form_detected": bool((parsed_page or {}).get("form_count")),
                "privacy_policy_link_found": bool((parsed_page or {}).get("privacy_links")),
-               "http_links": [], "broken_images": []}
+               "http_links": [], "broken_images": [], "dates": (parsed_page or {}).get("date_candidates", [])[:10],
+               "static_text_chars": (parsed_page or {}).get("text_chars", 0)}
         if parsed_page and not parsed_page.get("error"):
-            for candidate in parsed_page.get("links", []):
+            selected_links = [candidate for candidate in parsed_page.get("links", [])
+                              if candidate.get("href", "").startswith(("http://", "https://"))][:5]
+            checked_page_links = await asyncio.gather(*[
+                _checked_link(page.context, {"url": candidate["href"], "kind": "http_link" if _is_http(candidate["href"]) else "internal_link",
+                                             "internal": _same_site(candidate["href"], base_url)}, public_host_cache, public_host_fn)
+                for candidate in selected_links])
+            for candidate, checked_link in zip(selected_links, checked_page_links):
                 target = candidate.get("href", "")
-                if _is_http(target):
-                    row["http_links"].append({"url": target, "ends_on_https": False})
+                row["http_links"].append({"url": target, "text": candidate.get("text", "")[:120],
+                                          "source_url": row["source_url"], "status": checked_link.get("status"),
+                                          "final_url": checked_link.get("final_url"),
+                                          "redirected": checked_link.get("redirected"),
+                                          "ends_on_https": checked_link.get("ends_on_https"),
+                                          "result": checked_link.get("result")})
             image_urls = list(dict.fromkeys(item["url"] for item in parsed_page.get("images", []) if item.get("url")))[:5]
             async def check_image(image_url):
                 checked_image = await _checked_link(page.context, {"url": image_url, "kind": "image", "internal": _same_site(image_url, base_url)}, public_host_cache, public_host_fn)
@@ -995,7 +1010,59 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
             checks = await asyncio.gather(*(check_image(image_url) for image_url in image_urls))
             row["broken_images"] = [item for item in checks if item.get("result") in {"broken", "request_failed"}]
             row["image_urls_checked"] = len(image_urls)
-            row["dates"] = parsed_page.get("date_candidates", [])[:10]
+            row["static_broken_images"] = row["broken_images"]
+            # Use the browser only when static HTML is sparse or omits images.
+            if parsed_page.get("text_chars", 0) < 250 or not image_urls:
+                rendered = None
+                rendered_page = None
+                try:
+                    rendered_page = await page.context.new_page()
+                    async def guard_route(route):
+                        request_url = route.request.url
+                        parts = urlsplit(request_url)
+                        host = _host(request_url)
+                        allowed_scheme = parts.scheme in {"http", "https"}
+                        is_document = route.request.resource_type == "document"
+                        same_site_document = not is_document or _same_site(request_url, base_url)
+                        if not allowed_scheme or not host or not same_site_document:
+                            await route.abort()
+                            return
+                        if host not in public_host_cache:
+                            public_host_cache[host] = await asyncio.to_thread(public_host_fn, host)
+                        if not public_host_cache[host]:
+                            await route.abort()
+                            return
+                        await route.continue_()
+                    await rendered_page.route("**/*", guard_route)
+                    response = await rendered_page.goto(row["source_url"], wait_until="domcontentloaded", timeout=6500)
+                    await rendered_page.wait_for_timeout(400)
+                    if response and _same_site(rendered_page.url, base_url):
+                        rendered = await rendered_page.evaluate("""() => ({
+                          title: document.title, text_chars: (document.body?.innerText || '').trim().length,
+                          form_count: document.forms.length,
+                          images: [...document.images].slice(0, 20).map(i => ({url:i.currentSrc||i.src, loaded:i.complete&&i.naturalWidth>0, alt:i.alt||''})),
+                          dates: [...document.querySelectorAll('time[datetime],meta[property*=date],meta[name*=date]')].slice(0,20).map(e=>({date:e.dateTime||e.content||'',source_url:location.href})),
+                          http_links: [...document.querySelectorAll('a[href^="http://"]')].slice(0,20).map(a=>({url:a.href,text:(a.innerText||a.getAttribute('aria-label')||'').trim().slice(0,120)}))
+                        })""")
+                except Exception as exc:
+                    row["rendered_review_error"] = f"{type(exc).__name__}: {exc}"[:200]
+                finally:
+                    if rendered_page:
+                        await rendered_page.close()
+                if rendered is not None:
+                    row["evidence_source"] = "static_html_and_playwright"
+                    row["rendered"] = {"source_url": row["source_url"], "title": rendered.get("title"),
+                                        "text_chars": rendered.get("text_chars"), "form_count": rendered.get("form_count"),
+                                        "dates": rendered.get("dates", []), "http_links": [],
+                                        "image_count": len(rendered.get("images", [])),
+                                        "failed_images": [i for i in rendered.get("images", []) if not i.get("loaded")],
+                                        "rendered_image_checks": True}
+                    for target in rendered.get("http_links", [])[:5] if rendered else []:
+                        verified = await _checked_link(page.context, {"url": target["url"], "kind": "http_link", "internal": _same_site(target["url"], base_url)}, public_host_cache, public_host_fn)
+                        row["rendered"]["http_links"].append({**target, "source_url": row["source_url"],
+                            "status": verified.get("status"), "final_url": verified.get("final_url"),
+                            "redirected": verified.get("redirected"), "ends_on_https": verified.get("ends_on_https"),
+                            "result": verified.get("result")})
         cross_page_reviews.append(row)
         if len(cross_page_reviews) >= 3:
             break
@@ -1027,6 +1094,6 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         "image_enlargement": image_enlargement,
         "additional_page_reviews": {"pages_reviewed": len(cross_page_reviews), "page_limit": 3,
                                      "image_check_limit_per_page": 5, "pages": cross_page_reviews,
-                                     "scope_note": "Bounded static review of up to three linked service, portfolio, about, or contact pages. Images, links, forms, policy-link presence, and available dates are recorded with their page URL; homepage-only visual screenshots and interactive smoke tests are unchanged."},
+                                     "scope_note": "Static HTML review of up to three linked service, portfolio, about, or contact pages. Sparse pages or pages without static images receive a bounded Playwright DOM pass. Findings retain source page and evidence source. Redirected documents must remain same-site; browser requests to non-public hosts are blocked. No forms are submitted; homepage-only screenshots and interaction tests are unchanged."},
     }
     return _safe_payload(result)
