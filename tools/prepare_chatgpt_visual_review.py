@@ -11,6 +11,7 @@ from PIL import Image
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 DESKTOP_MIN_WIDTH = 768
+VIEWPORT_WIDTHS = {"desktop": 1440, "mobile": 390}
 
 
 def validate_source_viewport(viewport: str, width: int, height: int, source: Path) -> None:
@@ -188,6 +189,40 @@ def main() -> int:
             raise FileNotFoundError(
                 f"Saved {viewport} screenshot is unavailable in the downloaded lead-hunt artifact"
             )
+        live_top = override_dir / f"{viewport}_top.png" if override_dir else None
+        live_mid = override_dir / f"{viewport}_mid.png" if override_dir else None
+        if live_top and live_mid and live_top.is_file() and live_mid.is_file():
+            recapture_manifest_path = override_dir / "recapture-manifest.json"
+            recapture_manifest = json.loads(recapture_manifest_path.read_text(encoding="utf-8"))
+            capture = next((item for item in recapture_manifest.get("screenshots", [])
+                            if item.get("viewport") == viewport), {})
+            scroll_check = capture.get("scroll_validation") or {}
+            actual_scroll = int(scroll_check.get("max_observed_scroll_px") or 0)
+            for view, live_path in (("top", live_top), ("mid", live_mid)):
+                with Image.open(live_path) as image:
+                    validate_source_viewport(viewport, image.width, image.height, live_path)
+                    if image.size != (VIEWPORT_WIDTHS[viewport], viewport_crop_heights[viewport]):
+                        raise ValueError(
+                            f"Fresh {viewport} {view} screenshot has unexpected dimensions: {image.size}"
+                        )
+                    target = output_dir / f"{viewport}_{view}.jpg"
+                    image.convert("RGB").save(target, format="JPEG", quality=90, optimize=True)
+                images.append({
+                    "viewport": viewport,
+                    "view": view,
+                    "path": str(target),
+                    "filename": target.name,
+                    "source_path": str(live_path),
+                    "bytes": target.stat().st_size,
+                    "source_dimensions": {"width": VIEWPORT_WIDTHS[viewport],
+                                          "height": viewport_crop_heights[viewport]},
+                    "uploaded_dimensions": {"width": VIEWPORT_WIDTHS[viewport],
+                                            "height": viewport_crop_heights[viewport]},
+                    "source_top_px": 0 if view == "top" else actual_scroll,
+                    "scrollable_height_px": actual_scroll,
+                    "crop": "fresh browser viewport screenshot after real keyboard/wheel scroll",
+                })
+            continue
         with Image.open(source) as image:
             original_size = image.size
             validate_source_viewport(viewport, image.width, image.height, source)
