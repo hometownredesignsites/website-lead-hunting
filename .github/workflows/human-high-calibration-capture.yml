@@ -1,4 +1,4 @@
-name: Capture human-high calibration sites
+name: Capture human-review calibration sites
 
 on:
   workflow_dispatch:
@@ -65,6 +65,7 @@ jobs:
           fi
           python -m pip install --disable-pip-version-check -r requirements.txt
           capture_args=(--targets-csv private-results-chatgpt/config/calibration_human_high_targets.csv \
+            --labels-csv private-results-chatgpt/config/human_review_calibration_labels.csv \
             --run-dir "runs/$CALIBRATION_RUN_KEY")
           if [[ -n "$CALIBRATION_TARGET_URL" ]]; then
             capture_args+=(--target-url "$CALIBRATION_TARGET_URL")

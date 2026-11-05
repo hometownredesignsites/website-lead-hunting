@@ -515,7 +515,7 @@ jobs:
           run_dir = Path("runs") / os.environ["RUN_KEY"]
           manifest_path = run_dir / "RUN_MANIFEST.json"
           manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
-          if manifest.get("run_type") == "human_high_calibration_capture":
+          if manifest.get("run_type") in {"human_high_calibration_capture", "human_review_calibration_capture"}:
               message = "Calibration screenshot cohort: lead-hunt run validation is not applicable."
               print(message)
               with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:

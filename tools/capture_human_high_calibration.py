@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture fresh desktop and mobile screenshots for private human-high calibration targets."""
+"""Capture fresh screenshots and script evidence for private human-review calibration targets."""
 from __future__ import annotations
 
 import argparse
@@ -46,9 +46,9 @@ def safe_url(value: str) -> str:
     return value.strip()
 
 
-def candidate_id(index: int, host: str) -> str:
+def candidate_id(index: int, host: str, label: str = "high") -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "_", host).strip("_").lower()[:100]
-    return f"cal-high-{index:03d}-{slug}"
+    return f"cal-{label}-{index:03d}-{slug}"
 
 
 async def capture(page, url: str, path: Path, width: int, height: int) -> dict:
@@ -93,8 +93,19 @@ async def capture_run(args) -> int:
         requested_host = (urlsplit(args.target_url.strip()).hostname or "").lower().removeprefix("www.")
         targets = [row for row in targets
                    if (urlsplit((row.get("website") or "").strip()).hostname or "").lower().removeprefix("www.") == requested_host]
+        if not targets and args.labels_csv:
+            with args.labels_csv.open(encoding="utf-8-sig", newline="") as labels_file:
+                labels = list(csv.DictReader(labels_file))
+            targets = [row for row in labels
+                       if (urlsplit((row.get("website") or "").strip()).hostname or "").lower().removeprefix("www.") == requested_host]
+            if len(targets) == 1:
+                label = str(targets[0].get("decision") or "").strip().lower()
+                if label not in {"high", "medium", "pass"}:
+                    raise ValueError(f"Human-review label for {requested_host} is not High, Medium, or Pass")
+                targets[0]["human_label"] = label
+                targets[0]["human_review_note"] = targets[0].get("notes", "")
         if len(targets) != 1:
-            raise ValueError(f"--target-url must match exactly one private calibration target; matched {len(targets)}")
+            raise ValueError(f"--target-url must match exactly one private High target or human-review label; matched {len(targets)}")
     if not targets:
         raise ValueError("Calibration target CSV has no rows")
     candidates = []
@@ -105,19 +116,23 @@ async def capture_run(args) -> int:
             business = (target.get("business") or "").strip()
             location = (target.get("location") or "").strip()
             url = safe_url(target.get("website") or "")
-            if (target.get("human_label") or "").strip().lower() != "high":
-                raise ValueError(f"Target row {index} is not labeled human_high")
+            human_label = (target.get("human_label") or "").strip().lower()
+            if human_label not in {"high", "medium", "pass"}:
+                raise ValueError(f"Target row {index} does not have a valid human-review label")
             host = (urlsplit(url).hostname or "").lower()
-            identifier = candidate_id(index, host)
+            identifier = candidate_id(index, host, human_label)
             desktop_path = screenshots_dir / f"{identifier}_desktop.png"
             mobile_path = screenshots_dir / f"{identifier}_mobile.png"
             record = {"candidate_id": identifier, "business_name": business,
-                      "category": "Human-reviewed High calibration cohort",
+                      "category": "Human-reviewed calibration cohort",
                       "configured_location": location, "region": "Colorado",
                       "domain": host, "canonical_url": url, "final_url": url,
                       "site_title": "", "site_check_status": "error",
                       "screenshots": {}, "site_checks": {"status": "not_run"},
-                      "visual_page_flow": {}}
+                      "visual_page_flow": {},
+                      "human_review": {"decision": human_label,
+                                       "basis": "private human review; label is not sent to visual model",
+                                       "notes": target.get("human_review_note") or target.get("notes")}}
             desktop_context = await browser.new_context(ignore_https_errors=False,
                 viewport={"width": 1440, "height": 1000})
             mobile_context = await browser.new_context(ignore_https_errors=False,
@@ -169,7 +184,9 @@ async def capture_run(args) -> int:
                     if value.get("status") in {"absent", "uncertain"}], **hero_by_view}
                 record.update({"site_check_status": "loaded", "site_title": title,
                                "final_url": final_url, "domain": final_host or host,
-                               "human_review": {"decision": "high", "basis": "provided human review cohort"}})
+                               "human_review": {"decision": human_label,
+                                                "basis": "private human review; label is not sent to visual model",
+                                                "notes": target.get("human_review_note") or target.get("notes")}})
             except Exception as exc:
                 record["capture_error"] = f"{type(exc).__name__}: {exc}"[:700]
             finally:
@@ -181,7 +198,7 @@ async def capture_run(args) -> int:
     ledger_path = run_dir / "CANDIDATE_LEDGER.jsonl"
     ledger_path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in candidates),
                            encoding="utf-8")
-    manifest = {"run_key": run_dir.name, "run_type": "human_high_calibration_capture",
+    manifest = {"run_key": run_dir.name, "run_type": "human_review_calibration_capture",
                 "created_at": now_iso(), "target_count": len(candidates),
                 "capture_method": "Playwright Chromium; per-site desktop and mobile full-page screenshots plus bounded desktop script audit",
                 "human_labels_are_not_sent_to_visual_model": True}
@@ -196,8 +213,10 @@ async def capture_run(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--targets-csv", type=Path, required=True)
+    parser.add_argument("--labels-csv", type=Path,
+                        help="Optional private human-review labels CSV used to capture one non-High labeled site")
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--target-url", help="Optional website URL that must match exactly one row in the private targets CSV")
+    parser.add_argument("--target-url", help="Optional website URL matched against the private High targets or human-review labels")
     return asyncio.run(capture_run(parser.parse_args()))
 
 
