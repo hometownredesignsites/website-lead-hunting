@@ -68,6 +68,12 @@ class VisualFactorScoringTests(unittest.TestCase):
         )
         self.assertEqual(parsed["hero_imagery"]["source"], "screenshots")
         self.assertIn("page scroll", parsed["hero_imagery"]["evidence"])
+        parsed = parse_factor_assessments(
+            "Layout and mobile use: assessed (minor) — Layout remains readable. "
+            "Source=screenshots (all four views); supporting page-flow evidence=script_audit.",
+            {},
+        )
+        self.assertEqual(parsed["layout_mobile"]["source"], "screenshots")
 
     def test_incomplete_script_checks_cannot_be_scored_as_clean(self):
         factors = self.factors()

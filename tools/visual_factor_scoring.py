@@ -49,7 +49,10 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
         # arbitrary prose cannot satisfy the source requirement.
         source_match = re.search(
             r"\s*;?\s*source\s*=\s*(screenshots|script_audit|screenshots_and_script_audit)"
-            r"(?:\s+and\s+page[- ]flow measurements)?\s*[.,;:!?]*\s*$",
+            r"(?:\s*\([^)]*\))?"
+            r"(?:\s+and\s+page[- ]flow measurements)?"
+            r"(?:\s*;\s*(?:supplementary|supporting)\s+page[- ]flow evidence\s*=\s*script_audit)?"
+            r"\s*[.,;:!?]*\s*$",
             evidence,
             flags=re.I,
         )
