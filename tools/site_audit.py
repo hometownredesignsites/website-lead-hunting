@@ -362,7 +362,7 @@ async def collect_dom_facts(page) -> dict:
         complete: image.complete, natural_width: image.naturalWidth,
         failed: image.complete && image.naturalWidth === 0}));
       const text = document.body?.innerText || '';
-      const copyright_years = [...text.matchAll(/(?:©|copyright)\\s*(?:\\d{4}\\s*[-–]\\s*)?(20\\d{2})/ig)].map(m => Number(m[1]));
+      const copyright_years = [...text.matchAll(/(?:©|copyright)\\s*(?:(?:19|20)\\d{2}\\s*[-–]\\s*)?((?:19|20)\\d{2})/ig)].map(m => Number(m[1]));
       const dates = [];
       for (const t of document.querySelectorAll('time[datetime]')) {
         const article = t.closest('article');
@@ -419,6 +419,30 @@ async def collect_dom_facts(page) -> dict:
         safe_candidate: visible(el) && !el.closest('form') && el.type !== 'submit' &&
           (el.hasAttribute('aria-expanded') || el.hasAttribute('aria-controls') || el.getAttribute('role') === 'tab')
       }));
+      const contentImages = [...document.images].filter(image => visible(image) && image.complete &&
+        image.naturalWidth >= 160 && image.naturalHeight >= 100 &&
+        !/logo|icon|avatar|badge|pixel|tracking/i.test(`${image.alt || ''} ${image.className || ''} ${image.id || ''} ${image.currentSrc || image.src || ''}`));
+      const enlargementAffordances = [];
+      for (const image of contentImages) {
+        let el = image;
+        let evidence = '';
+        for (let depth = 0; el && depth < 4; depth++, el = el.parentElement) {
+          const hint = [el.tagName, el.getAttribute('role'), el.getAttribute('aria-label'), el.getAttribute('title'),
+            el.getAttribute('class'), el.getAttribute('id'), el.getAttribute('data-fancybox'),
+            el.getAttribute('data-lightbox'), el.getAttribute('data-gallery'), el.getAttribute('onclick')]
+            .filter(Boolean).join(' ');
+          const directImageLink = el.tagName.toLowerCase() === 'a' &&
+            /\.(?:avif|bmp|gif|jpe?g|png|webp|svg)(?:$|[?#])/i.test(el.href || '');
+          if (directImageLink ||
+              /lightbox|fancybox|photoswipe|photo-swipe|image-zoom|zoom-image|enlarge-image|view-larger|data-lightbox|data-fancybox|aria-label[^ ]*(?:zoom|enlarge|lightbox)/i.test(hint)) {
+            evidence = hint.slice(0, 300);
+            break;
+          }
+        }
+        if (evidence) enlargementAffordances.push({alt: image.alt || '', src: image.currentSrc || image.src || '', evidence});
+      }
+      const enlargementStatus = contentImages.length < 4 ? 'not_applicable' :
+        enlargementAffordances.length ? 'affordance_detected' : 'no_affordance_detected';
       const anchors_on_page = new Set([...document.querySelectorAll('[id]')].map(el => el.id));
       for (const el of document.querySelectorAll('a[name]')) anchors_on_page.add(el.name);
       const broken_anchors = anchors.filter(a => a.href.includes('#') && new URL(a.href).origin === location.origin &&
@@ -463,6 +487,9 @@ async def collect_dom_facts(page) -> dict:
         has_contact_path: contact_links.length > 0, has_cta: anchors.some(a => /contact|call|visit|book|schedule|request|get a quote|estimate|get in touch/i.test(a.text)),
         twitter_assets: twitter_assets.slice(0, 20), x_assets: x_assets.slice(0, 20),
         legacy_twitter_branding: twitter_assets.length > 0 && x_assets.length === 0,
+        image_enlargement: {status: enlargementStatus, content_image_count: contentImages.length,
+          affordance_count: enlargementAffordances.length, examples: enlargementAffordances.slice(0, 12),
+          note: 'Markup heuristic only: no detected affordance does not prove no JavaScript lightbox exists.'},
         safe_controls: controls.filter(c => c.safe_candidate).slice(0, 30), broken_anchors: broken_anchors.slice(0, 60),
         copyright_years};
     }""")
@@ -916,6 +943,9 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
                "twitter_account_links": [a.get("href") for a in anchors if "twitter.com" in a.get("href", "")][:20],
                "note": "A Twitter account link alone is not treated as evidence of an old logo; asset labels and identifiers are heuristic and should be visually confirmed."}
     copyright_signal = _copyright_footer_signal(facts.get("copyright_years", []))
+    image_enlargement = facts.get("image_enlargement") or {
+        "status": "unknown", "content_image_count": 0, "affordance_count": 0,
+        "examples": [], "note": "Image enlargement affordance detection was unavailable."}
 
     result = {
         "status": "partial" if len(selected) > MAX_LINK_CHECKS or facts.get("pending_images") else "completed",
@@ -941,5 +971,6 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         "content_freshness": freshness,
         "copyright_footer_signal": copyright_signal,
         "legacy_twitter_branding": twitter,
+        "image_enlargement": image_enlargement,
     }
     return _safe_payload(result)

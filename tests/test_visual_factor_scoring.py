@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from visual_factor_scoring import (ASSESSMENT_VERSION, enforce_script_audit_evidence, has_complete_response_scorecard,
+from visual_factor_scoring import (ASSESSMENT_VERSION, FACTOR_SOURCES, FACTORS, enforce_script_audit_evidence, has_complete_response_scorecard,
                                    normalize_and_score, parse_factor_assessments)
 from build_human_review_benchmark import assessment_fields, assign_stratified_split, summarize
 from validate_chatgpt_visual_review import main as validate_chatgpt_review
@@ -16,15 +16,8 @@ from validate_chatgpt_visual_review import main as validate_chatgpt_review
 
 class VisualFactorScoringTests(unittest.TestCase):
     def factors(self, severity="none"):
-        sources = {
-            "hero_imagery": "screenshots",
-            "readability": "screenshots",
-            "layout_mobile": "screenshots",
-            "broken_images": "script_audit",
-            "interactions": "script_audit",
-        }
         return {key: {"severity": severity, "evidence": f"Evidence for {key}", "source": source}
-                for key, source in sources.items()}
+                for key, source in FACTOR_SOURCES.items()}
 
     def test_fixed_factor_weights_and_verdict_bands(self):
         factors = self.factors()
@@ -141,6 +134,8 @@ class VisualFactorScoringTests(unittest.TestCase):
         self.assertFalse(has_complete_response_scorecard(score_only))
         complete = score_only + "\n" + "\n".join((
             "Hero imagery: minor — text-only hero; source=screenshots",
+            "Image quality: none — photos are sharp; source=screenshots",
+            "Design freshness: none — visual language is cohesive; source=screenshots",
             "Readability: none — heading is legible; source=screenshots",
             "Layout and mobile use: none — controls fit the viewport; source=screenshots",
             "Broken images: none — no failed images; source=script_audit",
@@ -152,15 +147,15 @@ class VisualFactorScoringTests(unittest.TestCase):
         flattened = (
             "Limitations: no script-audit evidence. Factor assessments: "
             "Hero imagery: minor — text-only hero; source=screenshots "
+            "Image quality: none — photos are sharp; source=screenshots "
+            "Design freshness: moderate — dated typography and controls; source=screenshots "
             "Readability: moderate — small dense text; source=screenshots "
             "Layout and mobile use: moderate — tightly packed mobile layout; source=screenshots "
             "Broken images: not_assessable — audit not provided; source=script_audit "
             "Interactions: not_assessable — audit not provided; source=script_audit"
         )
         factors = parse_factor_assessments(flattened, {})
-        self.assertEqual(set(factors), {
-            "hero_imagery", "readability", "layout_mobile", "broken_images", "interactions"
-        })
+        self.assertEqual(set(factors), set(FACTORS))
         self.assertEqual(factors["readability"]["severity"], "moderate")
         self.assertTrue(has_complete_response_scorecard(
             "Visual opportunity score: 55/100\n" + flattened
@@ -169,7 +164,7 @@ class VisualFactorScoringTests(unittest.TestCase):
             "hero_imagery": {"severity": "none", "evidence": "JSON value", "source": "screenshots"}
         }}
         merged = parse_factor_assessments(flattened, partial_json)
-        self.assertEqual(len(merged), 5)
+        self.assertEqual(len(merged), len(FACTORS))
         self.assertEqual(merged["hero_imagery"]["evidence"], "JSON value")
         self.assertTrue(has_complete_response_scorecard(flattened, partial_json))
 

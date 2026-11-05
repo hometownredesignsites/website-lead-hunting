@@ -4,10 +4,12 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v3"
+ASSESSMENT_VERSION = "fixed-factors-v4"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
+    "image_quality": "Image quality",
+    "design_freshness": "Design freshness",
     "readability": "Readability",
     "layout_mobile": "Layout and mobile use",
     "broken_images": "Broken images",
@@ -15,7 +17,8 @@ FACTORS = {
 }
 SEVERITY_POINTS = {"none": 0, "minor": 5, "moderate": 25, "severe": 50}
 FACTOR_SOURCES = {
-    "hero_imagery": "screenshots", "readability": "screenshots",
+    "hero_imagery": "screenshots", "image_quality": "screenshots",
+    "design_freshness": "screenshots", "readability": "screenshots",
     "layout_mobile": "screenshots", "broken_images": "script_audit",
     "interactions": "script_audit",
 }
@@ -40,7 +43,7 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
             r"\s*;?\s*source=(?:screenshots|script_audit|screenshots_and_script_audit)\s*$",
             "", evidence, flags=re.I,
         ).strip()
-        # Some model UIs flatten the entire five-factor answer into a single paragraph.
+        # Some model UIs flatten the entire factor answer into a single paragraph.
         # Ignore the section heading and unrelated content before the first factor.
         if evidence:
             severity = match.group("severity").casefold().replace(" ", "_").replace("-", "_")
@@ -49,7 +52,7 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
 
 
 def has_complete_response_scorecard(response_text: str, review: dict | None = None) -> bool:
-    """Return true only when the response includes a score and all five factors."""
+    """Return true only when the response includes a score and all required factors."""
     review = review or {}
     has_score = (
         "visual_opportunity_score" in review

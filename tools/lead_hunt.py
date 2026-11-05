@@ -46,6 +46,7 @@ SCORE_WEIGHTS = {
     "no_clear_cta": 10,
     "weak_metadata": 3,
     "failed_images": 10,
+    "no_image_enlargement": 5,
 }
 
 
@@ -248,6 +249,9 @@ def score_signals(metrics: dict) -> dict:
     """Score observable technical signals; never treat this as a visual verdict."""
     desktop = metrics.get("desktop", {})
     mobile = metrics.get("mobile", {})
+    site_checks = metrics.get("site_checks") or {}
+    image_enlargement = site_checks.get("image_enlargement") or {}
+    enlargement_status = image_enlargement.get("status")
     checks = {
         "no_https": (not metrics.get("https")) if "https" in metrics else None,
         "missing_viewport": (not desktop.get("viewportMeta")) if "viewportMeta" in desktop else None,
@@ -258,6 +262,10 @@ def score_signals(metrics: dict) -> dict:
         "weak_metadata": (not (desktop.get("titlePresent") and desktop.get("descriptionPresent"))) if "titlePresent" in desktop else None,
         "failed_images": (desktop.get("imageCount", 0) >= 4 and
                           desktop.get("loadedImageCount", 0) / max(1, desktop.get("imageCount", 0)) < 0.75) if "imageCount" in desktop else None,
+        # A weak, homepage-only signal for portfolio-heavy sites; markup heuristics
+        # cannot prove that a JavaScript lightbox is absent.
+        "no_image_enlargement": True if enlargement_status == "no_affordance_detected" else
+                                False if enlargement_status == "affordance_detected" else None,
     }
     applicable = {key: value for key, value in checks.items() if value is not None}
     total = sum(SCORE_WEIGHTS[key] for key in applicable)
@@ -294,7 +302,7 @@ def score_signals(metrics: dict) -> dict:
     return {"automated_priority": priority, "website_opportunity_score": score,
             "technical_priority_before_email_bonus": technical_priority,
             "email_opportunity_bonus_points": email_bonus,
-            "score_basis": "normalized technical score plus 5 opportunity points for a detected consumer email domain when evidence is sufficient; absent or uncertain desktop/mobile first-viewport hero media triggers visual review",
+            "score_basis": "normalized technical score plus 5 opportunity points for a detected consumer email domain and a low-weight image-enlargement signal when evidence is sufficient; absent or uncertain desktop/mobile first-viewport hero media triggers visual review",
             "signals": {key: "unknown" if value is None else "issue" if value else "clear" for key, value in checks.items()},
             "opportunity_signals": {"consumer_email_domain_mismatch":
                                     "observed" if email_signal.get("consumer_provider_domain_mismatch") else
