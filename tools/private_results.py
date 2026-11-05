@@ -74,18 +74,33 @@ def commit(repo: Path, paths: list[str], message: str) -> bool:
     if not branch:
         raise RuntimeError("Private results checkout is detached; refusing to push")
     encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
-    push_command = ["git", "-C", str(repo), "-c",
-                    f"http.extraheader=AUTHORIZATION: basic {encoded}",
+    auth_config = ["-c", f"http.extraheader=AUTHORIZATION: basic {encoded}"]
+    push_command = ["git", "-C", str(repo), *auth_config,
                     "push", "origin", f"HEAD:{branch}"]
     for attempt in range(3):
         pushed = subprocess.run(push_command, check=False, text=True, capture_output=True)
         if pushed.returncode == 0:
             break
-        if attempt == 2:
+        push_error = "\n".join(part for part in (pushed.stdout, pushed.stderr) if part).strip()
+        lowered_error = push_error.lower()
+        needs_rebase = any(marker in lowered_error for marker in (
+            "non-fast-forward",
+            "fetch first",
+            "remote contains work that you do not have locally",
+            "stale info",
+        ))
+        if attempt == 2 or not needs_rebase:
             raise subprocess.CalledProcessError(pushed.returncode, push_command,
-                                                output=pushed.stdout, stderr=pushed.stderr)
+                                                output=pushed.stdout, stderr=push_error)
         print(f"Private results branch advanced during push; rebasing and retrying ({attempt + 1}/2).")
-        git(repo, "fetch", "origin", branch)
+        fetched = subprocess.run(
+            ["git", "-C", str(repo), *auth_config, "fetch", "origin", branch],
+            check=False, text=True, capture_output=True,
+        )
+        if fetched.returncode != 0:
+            fetch_error = "\n".join(part for part in (fetched.stdout, fetched.stderr) if part).strip()
+            raise subprocess.CalledProcessError(fetched.returncode, "git fetch origin",
+                                                output=fetched.stdout, stderr=fetch_error)
         try:
             git(repo, "rebase", f"origin/{branch}")
         except subprocess.CalledProcessError:
