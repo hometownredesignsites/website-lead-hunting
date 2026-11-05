@@ -188,67 +188,75 @@ def attach_image_files(page, image_paths: list[Path], timeout_ms: int = 15000) -
         if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
             raise ValueError("ChatGPT image attachments must be PNG, JPEG, or WebP files")
 
-    file_inputs = page.locator("input[type='file']")
-    if file_inputs.count() == 0:
-        plus_selectors = [
-            "button[data-testid='composer-plus-btn']",
-            "button[aria-label*='Attach']",
-            "button[aria-label*='attach']",
-            "button[aria-label*='Upload']",
-            "button[aria-label*='upload']",
-        ]
-        clicked = False
-        for selector in plus_selectors:
-            candidate = page.locator(selector).first
-            try:
-                if candidate.count() and candidate.is_visible() and candidate.is_enabled():
-                    candidate.click(timeout=2000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if not clicked:
-            raise RuntimeError("Could not find a visible ChatGPT attachment control")
-        deadline = time.time() + max(1, timeout_ms / 1000)
-        while time.time() < deadline and file_inputs.count() == 0:
-            page.wait_for_timeout(250)
-
-    if file_inputs.count() == 0:
-        raise RuntimeError("ChatGPT did not expose a file input after opening the attachment menu")
-    input_count = file_inputs.count()
-    selected = file_inputs.nth(input_count - 1)
-    selected.set_input_files([str(image_path) for image_path in image_paths], timeout=timeout_ms)
-    deadline = time.time() + max(1, timeout_ms / 1000)
     uploaded: list[dict] = []
-    while time.time() < deadline:
-        try:
-            attachment_inputs = page.locator("input[name='imageAttachments']")
-            pending_inputs = page.locator("input[name='pendingImageUploads']")
-            if attachment_inputs.count():
-                raw_attachments = attachment_inputs.first.evaluate("el => el.value")
-                attachments = json.loads(raw_attachments or "[]")
-                pending = (json.loads(pending_inputs.first.evaluate("el => el.value") or "[]")
-                           if pending_inputs.count() else [])
-                if len(attachments) >= len(image_paths):
-                    uploaded = attachments[-len(image_paths):]
-                else:
-                    uploaded = []
-                if (len(uploaded) == len(image_paths)
-                        and all(isinstance(item, dict) and item.get("fileId") for item in uploaded)
-                        and not pending):
-                    break
-        except Exception:
-            uploaded = None
-        page.wait_for_timeout(250)
-    if not uploaded or len(uploaded) != len(image_paths):
-        raise RuntimeError("ChatGPT did not confirm all uploaded images in its composer")
-    page.wait_for_timeout(500)
-    return [{"status": "uploaded", "filename": image_path.name,
-             "uploaded_filename": item.get("name"),
-             "bytes": image_path.stat().st_size, "file_id": item.get("fileId"),
-             "width": item.get("width"), "height": item.get("height"),
-             "file_input_count": input_count}
-            for image_path, item in zip(image_paths, uploaded)]
+    for image_path in image_paths:
+        attachment_inputs = page.locator("input[name='imageAttachments']")
+        baseline_count = 0
+        if attachment_inputs.count():
+            try:
+                baseline_count = len(json.loads(attachment_inputs.first.evaluate("el => el.value") or "[]"))
+            except Exception:
+                baseline_count = 0
+
+        file_inputs = page.locator("input[type='file']")
+        if file_inputs.count() == 0:
+            plus_selectors = [
+                "button[data-testid='composer-plus-btn']",
+                "button[aria-label*='Attach']",
+                "button[aria-label*='attach']",
+                "button[aria-label*='Upload']",
+                "button[aria-label*='upload']",
+            ]
+            clicked = False
+            for selector in plus_selectors:
+                candidate = page.locator(selector).first
+                try:
+                    if candidate.count() and candidate.is_visible() and candidate.is_enabled():
+                        candidate.click(timeout=2000)
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                raise RuntimeError("Could not find a visible ChatGPT attachment control")
+            deadline = time.time() + max(1, timeout_ms / 1000)
+            while time.time() < deadline and file_inputs.count() == 0:
+                page.wait_for_timeout(250)
+
+        if file_inputs.count() == 0:
+            raise RuntimeError("ChatGPT did not expose a file input after opening the attachment menu")
+        input_count = file_inputs.count()
+        selected = file_inputs.nth(input_count - 1)
+        selected.set_input_files([str(image_path)], timeout=timeout_ms)
+
+        deadline = time.time() + max(1, timeout_ms / 1000)
+        confirmed = None
+        while time.time() < deadline:
+            try:
+                attachment_inputs = page.locator("input[name='imageAttachments']")
+                pending_inputs = page.locator("input[name='pendingImageUploads']")
+                if attachment_inputs.count():
+                    attachments = json.loads(attachment_inputs.first.evaluate("el => el.value") or "[]")
+                    pending = (json.loads(pending_inputs.first.evaluate("el => el.value") or "[]")
+                               if pending_inputs.count() else [])
+                    if len(attachments) > baseline_count:
+                        item = attachments[baseline_count]
+                        if (isinstance(item, dict) and item.get("fileId") and not pending):
+                            confirmed = item
+                            break
+            except Exception:
+                pass
+            page.wait_for_timeout(250)
+        if confirmed is None:
+            raise RuntimeError(f"ChatGPT did not confirm uploaded image {image_path.name} in its composer")
+
+        uploaded.append({"status": "uploaded", "filename": image_path.name,
+                         "uploaded_filename": confirmed.get("name"),
+                         "bytes": image_path.stat().st_size, "file_id": confirmed.get("fileId"),
+                         "width": confirmed.get("width"), "height": confirmed.get("height"),
+                         "file_input_count": input_count})
+        page.wait_for_timeout(500)
+    return uploaded
 
 
 def attach_image_file(page, image_path: Path, timeout_ms: int = 15000) -> dict:
