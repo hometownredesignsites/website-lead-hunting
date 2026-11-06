@@ -13,9 +13,11 @@ from PIL import Image
 try:
     from .lead_hunt import host_of, public_host
     from .prepare_chatgpt_visual_review import load_candidate
+    from .page_flow import inspect_page_flow
 except ImportError:
     from lead_hunt import host_of, public_host
     from prepare_chatgpt_visual_review import load_candidate
+    from page_flow import inspect_page_flow
 
 
 VIEWPORTS = {
@@ -88,17 +90,71 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
         top_target = output_dir / f"{viewport_name}_top.png"
         mid_target = output_dir / f"{viewport_name}_mid.png"
         await page.screenshot(path=str(top_target), full_page=False, animations="disabled", timeout=45000)
+        flow = await inspect_page_flow(page)
+        target_terms = ("project", "portfolio", "gallery", "our work", "recent work", "before", "after",
+                        "remodel", "renovation", "service")
+        def find_target(images):
+            usable = [item for item in images if isinstance(item, dict)
+                      and item.get("document_y") is not None
+                      and item.get("width", 0) >= 160 and item.get("height", 0) >= 100]
+            labeled = [item for item in usable
+                       if any(term in " ".join(str(item.get(key) or "") for key in ("alt", "src")).casefold()
+                              for term in target_terms)]
+            below_fold_labeled = next((item for item in labeled
+                                       if item["document_y"] >= viewport["height"] * 0.8), None)
+            if below_fold_labeled:
+                return below_fold_labeled
+            below_fold = next((item for item in usable
+                               if item["document_y"] >= viewport["height"] * 0.8), None)
+            return below_fold or (labeled[0] if labeled else None)
+
+        target_image = find_target(flow.get("content_images") or [])
+        discovery_steps = 0
+        # Scroll progressively to trigger lazy loading, then inspect the newly
+        # revealed content before deciding where the mid screenshot belongs.
+        while target_image is None and discovery_steps < 8:
+            await page.keyboard.press("PageDown")
+            await page.wait_for_timeout(350)
+            discovery_steps += 1
+            flow = await inspect_page_flow(page)
+            target_image = find_target(flow.get("content_images") or [])
+        usable_images = [item for item in (flow.get("content_images") or [])
+                         if isinstance(item, dict) and item.get("document_y") is not None
+                         and item.get("width", 0) >= 160 and item.get("height", 0) >= 100]
+        if target_image is None and usable_images:
+            target_image = usable_images[0]
+        if target_image:
+            target_scroll = max(MIN_VERIFIED_SCROLL_PX,
+                                int(target_image["document_y"] - viewport["height"] * 0.28))
+            await page.evaluate("y => window.scrollTo({top: y, behavior: 'instant'})", target_scroll)
+            await page.wait_for_timeout(500)
+            capture_target = {
+                "type": target_image.get("type", "image"),
+                "document_y": target_image["document_y"],
+                "alt": target_image.get("alt", ""),
+                "scroll_target_px": target_scroll,
+                "lazy_load_discovery_steps": discovery_steps,
+                "strategy": "first_meaningful_content_image",
+            }
+        else:
+            capture_target = {"strategy": "page_down_fallback", "reason": "no meaningful content image found",
+                             "lazy_load_discovery_steps": discovery_steps}
+            await page.keyboard.press("PageDown")
+            await page.wait_for_timeout(400)
         before_state = await page.evaluate("""() => {
             const root = document.scrollingElement || document.documentElement;
             return { windowY: window.scrollY, rootY: root.scrollTop,
                 rootMax: Math.max(0, root.scrollHeight - root.clientHeight) };
         }""")
-        await page.evaluate("""() => {
-            const body = document.body;
-            if (body) { body.setAttribute('tabindex', '-1'); body.focus({preventScroll: true}); }
-        }""")
         observed_positions = []
-        for method in ("PageDown", "wheel"):
+        if target_image:
+            observed_positions.append({"method": "content-image-target", **before_state})
+        else:
+            await page.evaluate("""() => {
+                const body = document.body;
+                if (body) { body.setAttribute('tabindex', '-1'); body.focus({preventScroll: true}); }
+            }""")
+        for method in (() if target_image else ("PageDown", "wheel")):
             for _ in range(PAGE_DOWN_ATTEMPTS):
                 if method == "PageDown":
                     await page.keyboard.press("PageDown")
@@ -150,8 +206,9 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
             "final_url": final_url,
             "path": top_target.name,
             "mid_path": mid_target.name,
+            "mid_capture_target": capture_target,
             "scroll_validation": {
-                "method": "PageDown+wheel",
+                "method": "content-image-target" if target_image else "PageDown+wheel",
                 "max_window_scroll_px": int(final_state.get("rootMax", 0)),
                 "max_observed_scroll_px": max_observed,
                 "minimum_required_scroll_px": MIN_VERIFIED_SCROLL_PX,

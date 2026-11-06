@@ -14,6 +14,35 @@ DESKTOP_MIN_WIDTH = 768
 VIEWPORT_WIDTHS = {"desktop": 1440, "mobile": 390}
 
 
+def content_aware_mid_position(flow: dict, max_scroll: int, crop_height: int) -> tuple[int, str]:
+    """Place the mid crop around the first useful below-the-fold image when possible."""
+    images = flow.get("content_images") or []
+    usable = [item for item in images if isinstance(item, dict)
+              and isinstance(item.get("document_y"), (int, float))
+              and item.get("width", 0) >= 160 and item.get("height", 0) >= 100]
+    # Prefer an image explicitly identified as project, portfolio, gallery, or
+    # service work. If the page has no such labels, use the first substantial
+    # image below the first viewport, then the first substantial image overall.
+    terms = ("project", "portfolio", "gallery", "our work", "recent work", "before", "after",
+             "remodel", "renovation", "service")
+    candidate = next((item for item in usable
+                      if any(term in " ".join(str(item.get(key) or "") for key in ("alt", "src")).casefold()
+                             for term in terms)), None)
+    if candidate is None:
+        candidate = next((item for item in usable
+                          if item["document_y"] >= crop_height * 0.8), None)
+    if candidate is None and usable:
+        candidate = usable[0]
+    if candidate:
+        image_y = int(candidate["document_y"])
+        # Keep the image in the central part of the viewport crop with room
+        # around it for the section heading and supporting content.
+        top = max(0, min(max_scroll, image_y - int(crop_height * 0.28)))
+        return top, (f"content-aware viewport crop centered on first meaningful {candidate.get('type', 'image')} "
+                     f"at document y={image_y}px ({candidate.get('alt') or 'no alt text'})")
+    return round(max_scroll * 0.25), "fallback viewport crop at 25% of scroll range; no meaningful image position available"
+
+
 def validate_source_viewport(viewport: str, width: int, height: int, source: Path) -> None:
     if width <= 0 or height <= 0:
         raise ValueError(f"{viewport} screenshot has invalid dimensions: {source}")
@@ -216,7 +245,6 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
     viewport_crop_heights = {"desktop": 900, "mobile": 844}
-    mid_page_scroll_fractions = {"desktop": 0.25, "mobile": 0.48}
     for viewport in ("desktop", "mobile"):
         record = screenshot_record.get(viewport) or {}
         if override_dir is None and (record.get("status") != "saved" or not record.get("path")):
@@ -258,7 +286,8 @@ def main() -> int:
                                             "height": viewport_crop_heights[viewport]},
                     "source_top_px": 0 if view == "top" else actual_scroll,
                     "scrollable_height_px": actual_scroll,
-                    "crop": "fresh browser viewport screenshot after real keyboard/wheel scroll",
+                    "crop": "fresh browser viewport screenshot targeted at page content or scrolled with keyboard/wheel",
+                    "capture_target": capture.get("mid_capture_target") if view == "mid" else None,
                 })
             continue
         with Image.open(source) as image:
@@ -267,11 +296,10 @@ def main() -> int:
             crop_height = min(viewport_crop_heights[viewport], image.height)
             max_scroll = max(0, image.height - crop_height)
             flow = page_flow.get(viewport) or {}
-            mid_fraction = mid_page_scroll_fractions[viewport]
+            mid_top, mid_note = content_aware_mid_position(flow, max_scroll, crop_height)
             view_positions = {
                 "top": (0, "top viewport crop from saved full-page screenshot"),
-                "mid": (round(max_scroll * mid_fraction),
-                       f"viewport crop at {mid_fraction:.0%} of the scrollable page"),
+                "mid": (mid_top, mid_note),
             }
             for view, (top, crop_note) in view_positions.items():
                 target = output_dir / f"{viewport}_{view}.jpg"
@@ -301,11 +329,12 @@ def main() -> int:
         "screenshots": [{"viewport": item["viewport"], "view": item["view"],
                          "filename": item["filename"],
                          "source_top_px": item["source_top_px"],
-                         "scrollable_height_px": item["scrollable_height_px"]}
+                         "scrollable_height_px": item["scrollable_height_px"],
+                         "capture_target": item.get("capture_target") or item.get("crop")}
                         for item in images],
     }
     instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
-Use only the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page; the mid views are viewport crops taken at 25% of the desktop and 48% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. A structured script audit is also supplied. Treat it as automated evidence, not as something visually verified. Base all five visual factors (hero imagery, image quality, design freshness, readability, and layout/mobile use) on the screenshots. For layout/mobile use, page-flow measurements may be cited only as supplementary context; they do not change the required source tag, which must be source=screenshots, and the visual judgment must cite a screenshot. Use script_audit evidence only as the primary source for broken images and interactions. Keep evidence sources explicit and never describe an automated finding as visually observed. Do not browse the site or infer facts not shown in the screenshots or audit. Python is the only authority for score and site outcome. Return factor evidence and severities only; do not provide any score or overall verdict. Every factor must state whether it is assessed, not_applicable, or uncertain, with a specific reason/evidence and source. If evidence text or a limitation says a factor cannot be assessed, that factor must be uncertain rather than assessed.
+Use only the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page. Mid views are selected to show a substantial project, portfolio, gallery, or service image when page-flow evidence makes one available; otherwise they use the first substantial below-the-fold image, with a scroll-position fallback only when no useful image position is known. A structured script audit is also supplied. Treat it as automated evidence, not as something visually verified. Base all five visual factors (hero imagery, image quality, design freshness, readability, and layout/mobile use) on the screenshots. For layout/mobile use, page-flow measurements may be cited only as supplementary context; they do not change the required source tag, which must be source=screenshots, and the visual judgment must cite a screenshot. Use script_audit evidence only as the primary source for broken images and interactions. Keep evidence sources explicit and never describe an automated finding as visually observed. Do not browse the site or infer facts not shown in the screenshots or audit. Python is the only authority for score and site outcome. Return factor evidence and severities only; do not provide any score or overall verdict. Every factor must state whether it is assessed, not_applicable, or uncertain, with a specific reason/evidence and source. If evidence text or a limitation says a factor cannot be assessed, that factor must be uncertain rather than assessed.
 
 Rate these seven fixed factors: hero_imagery (screenshots), image_quality (screenshots), design_freshness (screenshots), readability (screenshots), layout_mobile (screenshots), broken_images (script_audit), interactions (script_audit). For each, use state=assessed with severity none/minor/moderate/severe, state=not_applicable with no severity when the check truly does not apply, or state=uncertain with no severity when evidence is insufficient. Give concise, specific evidence or the reason for not_applicable/uncertain, and identify the evidence source. For broken_images, status=sampled means the audit inspected its sufficient sample of at least 20 lazy-loaded images; if failed_image_count is zero and request_failures is empty, assess this factor as none and state that the conclusion is based on the sample. Transient request failures are listed separately and do not establish broken customer-facing imagery by themselves. Do not mark it uncertain just because more lazy images exist beyond the sample. Report confirmed failures when listed. A global partial audit status may reflect another bounded check and does not override this per-factor sample rule. Do not create extra scoring factors or count issue sentences. Do not include a score, overall verdict, or inferred decision. Python calculates the score and outcome from named factors: none=0, minor=5, moderate=25, severe=50; not_applicable contributes zero; uncertain on any required factor produces an Uncertain outcome with no numeric score. When the script confirms no prominent image/video/background image in the first viewport, hero imagery receives at least 45 points; this replaces weaker points for that same issue. Moderate or severe overall dated-design findings also receive at least 45 points in design_freshness, replacing that factor's weaker points. Minor isolated outdated details stay at 5 points. The total is capped at 100. Verdict bands are Pass 0-49, Medium 50-74, High 75-100. Missing factor entries, state, source, or evidence invalidate the scorecard and trigger retry.
 
