@@ -31,6 +31,11 @@ on:
         default: "10"
         type: choice
         options: ["1", "2", "3", "5", "8", "10"]
+      ScanInitPass:
+        description: "Also send initial technical Pass candidates to visual assessment"
+        required: true
+        default: true
+        type: boolean
       category_index:
         description: "Optional one-based row for a controlled one-category run; 0 runs the entire private catalog"
         required: false
@@ -97,6 +102,7 @@ jobs:
           INPUT_REGION: ${{ inputs.region || 'Indiana' }}
           INPUT_MAX_SITES: ${{ inputs.max_sites_per_query || '10' }}
           INPUT_CATEGORY_INDEX: ${{ inputs.category_index || '0' }}
+          INPUT_SCAN_INIT_PASS: ${{ github.event_name == 'push' || inputs.ScanInitPass }}
           INPUT_CHILD_RUN_ID: ${{ inputs.child_run_id }}
           INPUT_CHILD_CONCLUSION: ${{ inputs.child_conclusion }}
           GITHUB_SHA: ${{ github.sha }}
@@ -120,6 +126,11 @@ jobs:
               --categories-csv config/business_categories.csv
               --cities-csv work/city-upload/cities.csv
               --max-sites-per-query "$INPUT_MAX_SITES")
+            if [[ "$INPUT_SCAN_INIT_PASS" == "true" ]]; then
+              args+=(--scan-init-pass)
+            else
+              args+=(--no-scan-init-pass)
+            fi
             if [[ "$INPUT_CATEGORY_INDEX" != "0" ]]; then
               args+=(--category-index "$INPUT_CATEGORY_INDEX")
             fi

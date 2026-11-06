@@ -12,10 +12,15 @@ on:
         required: true
         type: string
       review_candidate_ids:
-        description: "Optional: candidate IDs separated by commas or newlines. Leave blank to select High/Medium candidates or candidates with absent/uncertain first-viewport hero media (up to 20)."
+        description: "Optional: candidate IDs separated by commas or newlines. Leave blank for automatic selection (up to 20)."
         required: false
         default: ""
         type: string
+      ScanInitPass:
+        description: "Include candidates whose initial technical assessment was Pass when selecting automatically"
+        required: true
+        default: true
+        type: boolean
       refresh_screenshots:
         description: "Capture fresh desktop/mobile screenshots for an explicitly selected candidate (useful for a controlled rerun)"
         required: false
@@ -127,10 +132,16 @@ jobs:
           CITY_CAMPAIGN_KEY: ${{ inputs.city_campaign_key }}
           SOURCE_RUN_ID: ${{ inputs.review_source_run_id }}
           REFRESH_SCREENSHOTS: ${{ inputs.refresh_screenshots }}
+          SCAN_INIT_PASS: ${{ inputs.ScanInitPass }}
         run: |
           matrix_args=()
           if [[ "$REFRESH_SCREENSHOTS" == "true" ]]; then
             matrix_args+=(--refresh-screenshots)
+          fi
+          if [[ "$SCAN_INIT_PASS" == "true" ]]; then
+            matrix_args+=(--scan-init-pass)
+          else
+            matrix_args+=(--no-scan-init-pass)
           fi
           python tools/build_visual_review_matrix.py \
             --candidate-ids "$REVIEW_CANDIDATE_IDS" \

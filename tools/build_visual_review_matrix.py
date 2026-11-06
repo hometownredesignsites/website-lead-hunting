@@ -46,7 +46,8 @@ def has_valid_visual_score(row: dict) -> bool:
     )
 
 
-def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES) -> tuple[list[str], int]:
+def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES,
+                               scan_init_pass: bool = True) -> tuple[list[str], int]:
     ledger_path = run_dir / "CANDIDATE_LEDGER.jsonl"
     if not ledger_path.is_file():
         raise ValueError(f"Candidate ledger not found: {ledger_path}")
@@ -63,7 +64,7 @@ def select_eligible_candidates(run_dir: Path, limit: int = MAX_CANDIDATES) -> tu
         candidate_id = row.get("candidate_id")
         if (not isinstance(candidate_id, str) or not CANDIDATE_ID.fullmatch(candidate_id)
                 or row.get("site_check_status") != "loaded"
-                or not is_visual_review_eligible(row)
+                or not is_visual_review_eligible(row, scan_init_pass=scan_init_pass)
                 or has_valid_visual_score(row)):
             continue
         last_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
@@ -117,6 +118,8 @@ def main() -> int:
     parser.add_argument("--retry-round", type=int, default=0)
     parser.add_argument("--retry-request-id", default="")
     parser.add_argument("--source-run-id", default="")
+    parser.add_argument("--scan-init-pass", action=argparse.BooleanOptionalAction, default=True,
+                        help="Include candidates whose initial technical assessment was Pass")
     parser.add_argument("--refresh-screenshots", action="store_true",
                         help="Recapture screenshots for an explicitly selected manual review")
     args = parser.parse_args()
@@ -127,7 +130,8 @@ def main() -> int:
             raise ValueError("--refresh-screenshots requires explicit candidate IDs")
         if not args.run_dir:
             raise ValueError("Automatic selection requires --run-dir")
-        ids, eligible_count = select_eligible_candidates(args.run_dir)
+        ids, eligible_count = select_eligible_candidates(args.run_dir,
+                                                          scan_init_pass=args.scan_init_pass)
     failure_classes: dict[str, str | None] = {}
     if args.retry_request_id:
         if not args.run_dir or args.retry_round < 1:
