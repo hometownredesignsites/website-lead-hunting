@@ -250,7 +250,7 @@ jobs:
               --post-response-wait-seconds 2 \
               --response-settle-seconds 2 \
               --max-settle-wait-seconds 30 \
-              --expect-review-score \
+              --expect-factor-scorecard \
               --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
               --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
               --image-file "$REVIEW_DIR/website-review/mobile_review_sheet.jpg" \

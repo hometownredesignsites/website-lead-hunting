@@ -7,14 +7,10 @@ import json
 import re
 from pathlib import Path
 
-try:
-    from playwright_runner.prompt_contracts import extract_json_payload
-except ModuleNotFoundError:
-    from tools.playwright_runner.prompt_contracts import extract_json_payload
-try:
-    from visual_factor_scoring import enforce_script_audit_evidence, normalize_and_score, parse_factor_assessments
-except ModuleNotFoundError:
-    from tools.visual_factor_scoring import enforce_script_audit_evidence, normalize_and_score, parse_factor_assessments
+from playwright_runner.prompt_contracts import extract_json_payload
+from visual_factor_scoring import (ASSESSMENT_VERSION, FACTORS, enforce_script_audit_evidence,
+                                   has_prominent_first_view_video, normalize_and_score,
+                                   parse_factor_assessments)
 
 
 SECTION_KEYS = {
@@ -22,6 +18,10 @@ SECTION_KEYS = {
     "desktop mid observations": "desktop_mid_observations",
     "mobile top observations": "mobile_top_observations",
     "mobile mid observations": "mobile_mid_observations",
+    "desktop first-image observations": "desktop_first_image_observations",
+    "mobile first-image observations": "mobile_first_image_observations",
+    "desktop contact-form observations": "desktop_contact_form_observations",
+    "mobile contact-form observations": "mobile_contact_form_observations",
     "desktop observations": "desktop_observations",
     "mobile observations": "mobile_observations",
     "major issues": "major_issues",
@@ -33,42 +33,41 @@ SECTION_KEYS = {
 }
 
 
+def validate_image_uploads(metadata: dict, context: dict) -> dict:
+    """Verify Duck.ai's three uploaded images cover all four source views."""
+    attachment_records = metadata.get("image_attachments") or []
+    uploaded_names = {item.get("filename") for item in attachment_records
+                      if item.get("status") == "uploaded"}
+    upload_images = context.get("upload_images", [])
+    expected_names = {item.get("filename") for item in upload_images}
+    source_names = {item.get("filename") for item in context.get("screenshots", [])}
+    covered = [name for item in upload_images for name in item.get("covers", [])]
+    covered_names = set(covered)
+    errors = []
+    if uploaded_names != expected_names or len(attachment_records) != len(expected_names) or len(expected_names) != 3:
+        errors.append("all three expected image attachments were not confirmed uploaded")
+    if len(source_names) != 4:
+        errors.append("candidate context must list exactly four source top/mid desktop/mobile screenshots")
+    if covered_names != source_names or len(covered) != 4:
+        errors.append("uploaded images do not cover all four source top/mid screenshots exactly")
+    return {"errors": errors, "expected_uploaded_images": sorted(expected_names),
+            "confirmed_uploaded_images": sorted(uploaded_names),
+            "covered_source_screenshots": sorted(covered_names)}
+
+
 def parse_labeled_text(response_text: str, context: dict) -> dict | None:
-    labels = sorted([*SECTION_KEYS.keys(), "visual opportunity score", "verdict", "confidence"],
-                    key=len, reverse=True)
-    label_pattern = "|".join(re.escape(label) for label in labels)
-    response_text = re.sub(
-        rf"(?<!\n)\s+(?=(?:{label_pattern})\s*:)" , "\n", response_text,
-        flags=re.IGNORECASE,
-    )
-    response_text = response_text.split("Jump to latest response", 1)[0]
-    score_match = re.search(
-        r"^\s*Visual opportunity score\s*:\s*(?:(\d{1,3})\s*(?:/\s*100|out of 100)?|uncertain(?:\s*\(no score\))?)\s*$",
-        response_text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
-    verdict_match = re.search(
-        r"^\s*Verdict\s*:\s*(high|medium|pass|uncertain)\s*$",
-        response_text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
     confidence_match = re.search(
         r"^\s*Confidence\s*:\s*(low|medium|high)\s*$",
         response_text,
         flags=re.IGNORECASE | re.MULTILINE,
     )
-    if not score_match or not verdict_match or not confidence_match:
-        return None
-
-    verdict = verdict_match.group(1).lower()
-    score = int(score_match.group(1)) if score_match.group(1) else None
-    if (score is None) != (verdict == "uncertain"):
+    if not confidence_match:
         return None
 
     observations = {key: [] for key in SECTION_KEYS.values()}
     current_section = None
     issue_cluster_sections_seen: set[str] = set()
-    scalar_line = re.compile(r"^\s*(?:Visual opportunity score|Verdict|Confidence)\s*:", re.IGNORECASE)
+    scalar_line = re.compile(r"^\s*Confidence\s*:", re.IGNORECASE)
     bullet_prefix = re.compile(r"^\s*(?:[-*•]+|\d+[.)])\s*")
     for line in response_text.splitlines():
         if scalar_line.match(line):
@@ -92,8 +91,6 @@ def parse_labeled_text(response_text: str, context: dict) -> dict | None:
     return {
         "candidate_id": context.get("candidate_id"),
         "website_url": context.get("website_url"),
-        "visual_opportunity_score": score,
-        "visual_verdict": verdict,
         "confidence": confidence_match.group(1).lower(),
         "issue_clusters_reported": issue_cluster_sections_seen == {
             "moderate_issue_clusters", "severe_issue_clusters"
@@ -121,31 +118,6 @@ def cluster_count(review: dict, key: str) -> int:
     return len(normalized)
 
 
-def validate_image_uploads(metadata: dict, context: dict) -> dict:
-    attachment_records = metadata.get("image_attachments") or []
-    uploaded_names = {item.get("filename") for item in attachment_records
-                      if item.get("status") == "uploaded"}
-    upload_images = context.get("upload_images", [])
-    expected_names = {item.get("filename") for item in upload_images}
-    source_names = {item.get("filename") for item in context.get("screenshots", [])}
-    covered = [name for item in upload_images for name in item.get("covers", [])]
-    covered_names = set(covered)
-    errors = []
-    if (uploaded_names != expected_names or len(attachment_records) != len(expected_names)
-            or len(expected_names) != 3):
-        errors.append("all three expected image attachments were not confirmed uploaded")
-    if len(source_names) != 4:
-        errors.append("candidate context must list exactly four source top/mid desktop/mobile screenshots")
-    if covered_names != source_names or len(covered) != 4:
-        errors.append("uploaded images do not cover all four source top/mid screenshots exactly")
-    return {
-        "errors": errors,
-        "expected_uploaded_images": sorted(expected_names),
-        "confirmed_uploaded_images": sorted(uploaded_names),
-        "covered_source_screenshots": sorted(covered_names),
-    }
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--response", type=Path, required=True)
@@ -162,8 +134,10 @@ def main() -> int:
     if review is None:
         review = parse_labeled_text(response_text, context)
         response_format = "labeled_text" if review is not None else "unparsed"
-    errors: list[str] = []
     image_validation = validate_image_uploads(metadata, context)
+    expected_names = set(image_validation["expected_uploaded_images"])
+    uploaded_names = set(image_validation["confirmed_uploaded_images"])
+    errors: list[str] = []
     errors.extend(image_validation["errors"])
     if not review:
         errors.append("response has no parseable JSON object or labeled assessment scorecard")
@@ -172,33 +146,51 @@ def main() -> int:
             errors.append("candidate_id does not match the source candidate")
         if review.get("website_url") != context.get("website_url"):
             errors.append("website_url does not match the source candidate")
-        model_verdict = review.get("visual_verdict")
-        model_score = review.get("visual_opportunity_score")
-        if model_verdict not in {"high", "medium", "pass", "uncertain"}:
-            errors.append("visual_verdict is not an allowed value")
-        if model_verdict == "uncertain" and model_score is not None:
-            errors.append("uncertain model verdict must use a null score")
-        elif model_score is not None and (not isinstance(model_score, int) or isinstance(model_score, bool) or not 0 <= model_score <= 100):
-            errors.append("model-reported visual score must be an integer from 0 to 100 or null")
+        if "visual_opportunity_score" in review or "visual_verdict" in review:
+            errors.append("model response must not provide a final score or site verdict; Python is authoritative")
+        if re.search(r"^\s*(?:Visual opportunity score|Verdict)\s*:", response_text,
+                     flags=re.IGNORECASE | re.MULTILINE):
+            errors.append("model response contains a final score/verdict heading; return factor evidence only")
+        if re.search(r"\b(?:durable|final|overall|site)\s+(?:score|verdict|result|assessment)\b.{0,120}\buncertain\b",
+                     response_text, flags=re.IGNORECASE | re.DOTALL):
+            errors.append("model response declares the final result uncertain; express uncertainty on the relevant factor instead")
         factors = parse_factor_assessments(response_text, review)
         audit = context.get("script_audit") or {}
+        hero_video_present = has_prominent_first_view_video(audit)
         enforce_script_audit_evidence(factors, audit)
-        scorecard = normalize_and_score(factors)
-        if model_verdict == "uncertain" and not scorecard["errors"]:
-            scorecard["score"] = None
-            scorecard["verdict"] = "uncertain"
-            if not scorecard["uncertain_factors"]:
-                scorecard["uncertain_factors"] = ["model_assessment_uncertain"]
+        scorecard = normalize_and_score(factors, audit)
         review["factor_assessments"] = scorecard["factors"]
         errors.extend(scorecard["errors"])
-        review["model_reported_visual_opportunity_score"] = model_score
-        review["model_reported_visual_verdict"] = model_verdict
+        for key, factor in scorecard["factors"].items():
+            if factor.get("state") == "uncertain":
+                continue
+            # The deterministic video rule supersedes uncertainty about still
+            # photos: an in-view hero video is assumed to play and show work.
+            if key in {"hero_imagery", "image_quality"} and hero_video_present:
+                continue
+            label = re.escape(FACTORS[key])
+            if key == "interactions":
+                label = r"interaction(?:s)?"
+            uncertainty_near_factor = re.search(
+                rf"(?:{label})[^.\n]{{0,100}}(?:not assessable|cannot be assessed|unable to assess|insufficient evidence|not assessed)"
+                rf"|(?:not assessable|cannot be assessed|unable to assess|insufficient evidence|not assessed)[^.\n]{{0,100}}(?:{label})",
+                response_text, flags=re.IGNORECASE,
+            )
+            if uncertainty_near_factor:
+                errors.append(f"{key} evidence contradicts prose that says the factor is not assessable")
         review["visual_opportunity_score"] = scorecard["score"]
         review["visual_verdict"] = scorecard["verdict"]
+        review["site_outcome"] = scorecard["verdict"]
+        review["review_execution_status"] = "completed"
         review["score_calibration"] = {
-            "version": "fixed-factors-v1",
-            "method": "sum of five fixed factor severities: none=0, minor=5, moderate=25, severe=50; capped at 100",
-            "factor_points": {key: {"severity": value["severity"], "points": {"none": 0, "minor": 5, "moderate": 25, "severe": 50}.get(value["severity"])} for key, value in scorecard["factors"].items()},
+            "version": ASSESSMENT_VERSION,
+            "method": "Python-only sum of assessed factor points; not_applicable factors contribute zero; uncertain factors produce a null score and uncertain site outcome; prominent first-viewport video forces hero-imagery and image-quality points to zero; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor; displayed copyright year 1-2 years old adds 5 points, more than 2 years old adds 10; none=0, minor=5, moderate=25, severe=50; capped at 100",
+            "factor_points": {key: {"state": scorecard["factors"][key]["state"], "severity": scorecard["factors"][key]["severity"], "points": value} for key, value in scorecard.get("factor_points", {}).items()},
+            "hero_media_status": scorecard.get("hero_media_status"),
+            "hero_media_absence_points": scorecard.get("hero_media_absence_points", 0),
+            "hero_video_present": scorecard.get("hero_video_present", hero_video_present),
+            "dated_design_floor_points": scorecard.get("dated_design_floor_points", 0),
+            "stale_copyright_points": scorecard.get("stale_copyright_points", 0),
             "uncertain_factors": scorecard["uncertain_factors"],
         }
         review["raw_model_response"] = response_text
@@ -208,6 +200,10 @@ def main() -> int:
                 errors.append("uncertain verdict must use a null score")
         elif not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 100:
             errors.append("calibrated visual opportunity score must be an integer from 0 to 100")
+        elif ((verdict == "high" and score < 75)
+              or (verdict == "medium" and not 50 <= score <= 74)
+              or (verdict == "pass" and score > 49)):
+            errors.append("calibrated verdict does not match its score band")
         if review.get("confidence") not in {"low", "medium", "high"}:
             errors.append("confidence is not an allowed value")
         review["script_audit_evidence"] = context.get("script_audit", {"status": "not_available"})
@@ -226,13 +222,26 @@ def main() -> int:
                     "desktop_observations", "mobile_observations"):
             if not review.get(key):
                 errors.append(f"{key} must be non-empty")
+    if isinstance(review, dict) and errors:
+        review["review_execution_status"] = "completed"
+        review["scorecard_validation_status"] = "invalid"
+        review["site_outcome"] = "uncertain"
+        review["visual_opportunity_score"] = None
+        review["visual_verdict"] = "uncertain"
+    elif isinstance(review, dict):
+        review["review_execution_status"] = "completed"
+        review["scorecard_validation_status"] = "valid"
+
     result = {
         "status": "passed" if not errors else "failed",
+        "review_execution_status": "completed" if isinstance(review, dict) else "incomplete",
+        "scorecard_validation_status": "valid" if not errors else "invalid",
+        "site_outcome": ((review or {}).get("site_outcome") if not errors else "uncertain"),
         "response_format": response_format,
         "candidate_id": context.get("candidate_id"),
-        **{key: image_validation[key] for key in (
-            "expected_uploaded_images", "confirmed_uploaded_images", "covered_source_screenshots"
-        )},
+        "expected_uploaded_images": sorted(expected_names),
+        "confirmed_uploaded_images": sorted(uploaded_names),
+        "covered_source_screenshots": image_validation["covered_source_screenshots"],
         "review": review,
         "errors": errors,
     }

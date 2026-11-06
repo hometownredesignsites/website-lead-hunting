@@ -141,20 +141,17 @@ def run_stage_once(
                     followup_before_last_text = ""
             if followup_reason == "empty_response":
                 followup_prompt = (
-                    "Your previous response was empty. Please retry the visual assessment using the two "
-                    "labeled screenshot sheets already attached and the candidate context in this chat. Follow the original "
-                    "rubric and output format. Include the explicit score, verdict, confidence, and labeled "
-                    "observation sections. Return the concise plain-text scorecard without a preamble."
+                    "Your previous response was empty. Retry the visual assessment using the three images "
+                    "already attached and the candidate context in this chat. Follow the original rubric and "
+                    "return factor evidence only, with all seven factor assessments, states, severities, sources, "
+                    "and specific evidence. Do not provide an overall score or verdict."
                 )
             else:
                 followup_prompt = (
-                    "Reassess the two labeled screenshot sheets already attached. The score is redesign "
-                    "opportunity, not a rating of how good the site is: 0-49 pass for no material weakness, "
-                    "50-74 medium for a clearly evidenced material weakness, and 75-100 high for a severe "
-                    "or multiple major weaknesses. Return only this exact plain-text template; do not use a "
-                    "score out of 10 or a qualitative verdict:\n"
-                    "Visual opportunity score: <integer 0-100>/100, or uncertain (no score)\n"
-                    "Verdict: <high|medium|pass|uncertain>\n"
+                    "Reassess the three attached images using the original rubric. Return factor evidence only; "
+                    "Python calculates the durable score and outcome. Return exactly all seven factors with "
+                    "state=assessed (severity), not_applicable, or uncertain, plus specific evidence and its "
+                    "source. Do not include an overall score or verdict.\n"
                     "Confidence: <low|medium|high>\n"
                     "Desktop top observations:\n- <visible evidence>\n"
                     "Desktop mid observations:\n- <visible evidence>\n"
@@ -164,11 +161,13 @@ def run_stage_once(
                     "Major issues:\n- <issue or None observed>\nPositive signals:\n- <signal>\n"
                     "Recommended redesign focus:\n- <focus>\nLimitations:\n- <limitation or None noted>\n"
                     "Factor assessments:\n"
-                    "Hero imagery: <none|minor|moderate|severe|not_assessable> — <specific screenshot evidence; source=screenshots>\n"
-                    "Readability: <none|minor|moderate|severe|not_assessable> — <specific screenshot evidence; source=screenshots>\n"
-                    "Layout and mobile use: <none|minor|moderate|severe|not_assessable> — <specific screenshot evidence; source=screenshots>\n"
-                    "Broken images: <none|minor|moderate|severe|not_assessable> — <specific audit evidence; source=script_audit>\n"
-                    "Interactions: <none|minor|moderate|severe|not_assessable> — <specific audit evidence; source=script_audit>"
+                    "Hero imagery: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence; source=screenshots>\n"
+                    "Image quality: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence; source=screenshots>\n"
+                    "Design freshness: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence; source=screenshots>\n"
+                    "Readability: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence; source=screenshots>\n"
+                    "Layout and mobile use: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence; source=screenshots>\n"
+                    "Broken images: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence; source=script_audit>\n"
+                    "Interactions: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence; source=script_audit>"
                 )
             send_prompt(page, followup_composer, followup_prompt)
             settle_prompt_text = followup_prompt
