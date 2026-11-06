@@ -151,7 +151,8 @@ def start_next_category(workspace: Path, state: dict) -> None:
 
 def create_campaign(workspace: Path, campaign_key: str, region: str, categories_csv: Path,
                     cities_csv: Path, max_sites: int = 3,
-                    category_index: int = 0) -> tuple[Path, dict]:
+                    category_index: int = 0,
+                    scan_init_pass: bool = True) -> tuple[Path, dict]:
     path = state_path(workspace, campaign_key)
     if path.exists():
         raise ValueError(f"Campaign {campaign_key!r} already exists")
@@ -183,6 +184,7 @@ def create_campaign(workspace: Path, campaign_key: str, region: str, categories_
         "city_names": cities,
         "total_searches": len(categories) * len(cities),
         "max_sites_per_query": max_sites,
+        "scan_init_pass": bool(scan_init_pass),
         "categories_sha256": hashlib.sha256(categories_csv.read_bytes()).hexdigest(),
         "cities_sha256": hashlib.sha256(cities_csv.read_bytes()).hexdigest(),
         "source_city_commit": os.environ.get("GITHUB_SHA", ""),
@@ -222,7 +224,7 @@ def retry_queue_pending(run_dir: Path) -> bool:
                for entry in queue.get("entries", []))
 
 
-def review_counts(run_dir: Path) -> dict:
+def review_counts(run_dir: Path, scan_init_pass: bool = True) -> dict:
     ledger = run_dir / "CANDIDATE_LEDGER.jsonl"
     counts = {"passed": 0, "failed": 0, "retry_needed": 0, "not_reviewed": 0}
     if not ledger.is_file():
@@ -231,7 +233,8 @@ def review_counts(run_dir: Path) -> dict:
         if not line.strip():
             continue
         row = json.loads(line)
-        if row.get("site_check_status") != "loaded" or not is_visual_review_eligible(row):
+        if (row.get("site_check_status") != "loaded"
+                or not is_visual_review_eligible(row, scan_init_pass=scan_init_pass)):
             continue
         last = row.get("duckai_visual_review_last_attempt") or {}
         status = last.get("status")
@@ -263,7 +266,9 @@ def continue_after_reviews(workspace: Path, state: dict) -> None:
         state.setdefault("history", []).append({"event": "waiting_for_visual_retries", "at": now_iso()})
         return
     ledger_path = run_dir / "CANDIDATE_LEDGER.jsonl"
-    eligible, total_eligible = (select_eligible_candidates(run_dir, MAX_VISUAL_BATCH)
+    scan_init_pass = bool(state.get("scan_init_pass", True))
+    eligible, total_eligible = (select_eligible_candidates(run_dir, MAX_VISUAL_BATCH,
+                                                           scan_init_pass=scan_init_pass)
                                 if ledger_path.is_file() else ([], 0))
     if total_eligible:
         dispatch_review(state)
@@ -271,7 +276,7 @@ def continue_after_reviews(workspace: Path, state: dict) -> None:
                                  "selected": len(eligible), "remaining": total_eligible})
         return
 
-    counts = review_counts(run_dir)
+    counts = review_counts(run_dir, scan_init_pass=scan_init_pass)
     category = state["current_category"]
     state.setdefault("completed_categories", []).append({
         "index": state["current_category_index"],
@@ -312,6 +317,7 @@ def dispatch_payload(state: dict, ref: str) -> tuple[str, dict]:
                 "review_run_key": state["current_run_key"],
                 "review_source_run_id": str(state["source_lead_hunt_run_id"]),
                 "review_candidate_ids": "",
+                "ScanInitPass": "true" if state.get("scan_init_pass", True) else "false",
                 "automatic_retry_round": "0",
                 "retry_request_id": "",
                 "city_campaign_key": state["campaign_key"],
@@ -387,6 +393,8 @@ def main() -> int:
     parser.add_argument("--max-sites-per-query", type=int, default=3)
     parser.add_argument("--category-index", type=int, default=0,
                         help="Optional one-based category row; use 0 to run the complete catalog")
+    parser.add_argument("--scan-init-pass", action=argparse.BooleanOptionalAction, default=True,
+                        help="Include initial Pass candidates in visual assessment (default: true)")
     parser.add_argument("--child-run-id", default="")
     parser.add_argument("--child-conclusion", default="")
     parser.add_argument("--github-output", type=Path)
@@ -402,7 +410,8 @@ def main() -> int:
         categories = args.categories_csv if args.categories_csv.is_absolute() else workspace / args.categories_csv
         cities = args.cities_csv if args.cities_csv.is_absolute() else workspace / args.cities_csv
         path, state = create_campaign(workspace, key, args.region, categories, cities,
-                                     args.max_sites_per_query, args.category_index)
+                                     args.max_sites_per_query, args.category_index,
+                                     args.scan_init_pass)
         if state.get("next_action"):
             dispatch_keys.append(key)
     elif args.mode == "resume":
