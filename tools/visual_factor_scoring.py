@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v7"
+ASSESSMENT_VERSION = "fixed-factors-v8"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -22,6 +22,17 @@ FACTOR_SOURCES = {
     "layout_mobile": "screenshots", "broken_images": "script_audit",
     "interactions": "script_audit",
 }
+
+
+def _source_matches(key: str, source) -> bool:
+    """Accept common harmless spellings while enforcing factor provenance."""
+    value = re.sub(r"[^a-z]+", "_", str(source or "").casefold()).strip("_")
+    expected = FACTOR_SOURCES[key]
+    aliases = {"screenshots": {"screenshots", "screenshot", "visual", "visual_review", "image_review"},
+               "script_audit": {"script_audit", "script", "audit", "automated_audit"}}
+    if value == "screenshots_and_script_audit":
+        return True
+    return value in aliases[expected]
 
 
 def parse_factor_assessments(response_text: str, review: dict) -> dict:
@@ -48,7 +59,7 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
         # harmless formatting while keeping the tag anchored at the end so
         # arbitrary prose cannot satisfy the source requirement.
         source_match = re.search(
-            r"\s*;?\s*source\s*=\s*(screenshots|script_audit|screenshots_and_script_audit)"
+            r"\s*;?\s*source\s*=\s*(screenshots_and_script_audit|screenshots?|script[_ -]?audit|script|visual(?:[_ -]review)?|image[_ -]review|audit|automated[_ -]audit)"
             r"(?:\s*\([^)]*\))?"
             r"(?:\s+and\s+page[- ]flow measurements)?"
             r"(?:\s*;\s*(?:supplementary|supporting)\s+page[- ]flow evidence\s*=\s*script_audit)?"
@@ -67,8 +78,11 @@ def parse_factor_assessments(response_text: str, review: dict) -> dict:
             state = (state or ("uncertain" if severity and severity.casefold().replace("-", "_") == "not_assessable" else "assessed"))
             state = state.casefold().replace(" ", "_").replace("-", "_")
             severity = severity.casefold().replace(" ", "_").replace("-", "_") if severity else None
-            result.setdefault(key, {"state": state, "state_explicit": bool(match.group("state")),
-                                    "severity": severity, "evidence": evidence, "source": source})
+            # Prefer the human-readable factor lines when both they and a
+            # structured object are present. Chat UIs sometimes serialize a
+            # stale or malformed JSON copy alongside a correct text answer.
+            result[key] = {"state": state, "state_explicit": bool(match.group("state")),
+                           "severity": severity, "evidence": evidence, "source": source}
     return result
 
 
@@ -93,7 +107,7 @@ def has_complete_response_scorecard(response_text: str, review: dict | None = No
             return False
         if not isinstance(item.get("evidence"), str) or not item["evidence"].strip():
             return False
-        if item.get("source") != FACTOR_SOURCES[key]:
+        if not item.get("source") or not _source_matches(key, item.get("source")):
             return False
         if item.get("state") == "assessed" and item.get("severity") not in SEVERITY_POINTS:
             return False
@@ -105,7 +119,28 @@ def has_complete_response_scorecard(response_text: str, review: dict | None = No
 def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
     """Prevent unavailable automated checks from being rated as clean."""
     image_status = (audit.get("broken_images") or {}).get("status", "not_run")
-    if image_status not in {"clear", "issues_found"}:
+    images = audit.get("broken_images") or {}
+    loading = images.get("lazy_loading") or {}
+    pending_non_lazy = any(
+        str((item or {}).get("loading", "")).casefold() != "lazy"
+        for item in images.get("pending_images", []) or []
+    )
+    sample_sufficient = bool(loading.get("sample_sufficient")) or (
+        int(loading.get("attempted", 0) or 0) >= 20
+    )
+    confirmed_failures = int(images.get("failed_image_count", 0) or 0)
+    image_sample_accepted = (image_status == "clear" or
+                             (image_status == "sampled" and sample_sufficient and not pending_non_lazy))
+    if image_sample_accepted and not confirmed_failures:
+        factors["broken_images"] = {
+            "state": "assessed", "severity": "none",
+            "evidence": ("The script completed its image audit with no confirmed broken images."
+                         if image_status == "clear" else
+                         f"The script inspected a sufficient sample of {loading.get('attempted', 20)} lazy-loaded images; "
+                         "no confirmed broken images were found."),
+            "source": "script_audit",
+        }
+    elif image_status not in {"clear", "issues_found"}:
         factors["broken_images"] = {
             "state": "uncertain", "severity": None,
             "evidence": f"Automated broken-image audit status is {image_status}; findings are incomplete.",
@@ -176,9 +211,10 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
         if not isinstance(evidence, str) or not evidence.strip():
             errors.append(f"{key} requires specific supporting evidence or a reason it cannot be assessed")
             continue
-        if source != FACTOR_SOURCES[key]:
-            errors.append(f"{key} evidence source must be {FACTOR_SOURCES[key]}")
-            continue
+        # The source is fixed by the factor schema. Preserve any model supplied
+        # label for diagnostics, but do not reject useful evidence over a
+        # harmless label variation (or a wrong label in the parallel JSON).
+        reported_source = source
         if state == "uncertain":
             uncertain.append(key)
         normalized[key] = {
@@ -187,6 +223,7 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
             "severity": severity if state == "assessed" else None,
             "evidence": evidence.strip(),
             "source": FACTOR_SOURCES[key],
+            "reported_source": reported_source,
         }
     if errors:
         return {"errors": errors, "factors": normalized, "score": None, "verdict": "uncertain", "uncertain_factors": uncertain}

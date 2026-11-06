@@ -337,6 +337,16 @@ async def load_lazy_images(page) -> dict:
                 await page.wait_for_timeout(100)
             except Exception:
                 continue
+        # Give images a bounded opportunity to finish after they enter the
+        # viewport. A 100 ms pause only triggers lazy loading; it does not
+        # establish whether the request succeeded or is still pending.
+        if attempted:
+            try:
+                await page.wait_for_function(
+                    "indices => indices.every(index => { const image = document.images[index]; return !image || image.complete; })",
+                    arg=attempted, timeout=3500)
+            except Exception:
+                pass
         await page.evaluate("window.scrollTo(0, 0)")
         await page.wait_for_timeout(450)
         complete = len(pending) <= MAX_LAZY_IMAGES
@@ -844,7 +854,11 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
                         loading_report.get("complete") or
                         (item.get("loading") == "lazy" and int(item.get("index", -1)) in attempted_indices))}
                      for item in facts.get("failed_images", [])]
-    image_request_failures = [row for row in failed_events if row.get("resource_type") == "image"]
+    all_image_request_failures = [row for row in failed_events if row.get("resource_type") == "image"]
+    transient_image_request_failures = [row for row in all_image_request_failures
+                                        if "ERR_ABORTED" in str(row.get("failure", "")).upper()]
+    image_request_failures = [row for row in all_image_request_failures
+                              if row not in transient_image_request_failures]
     images_status = ("issues_found" if failed_images or image_request_failures else
                      "sampled" if sample_sufficient and not loading_report.get("complete") else
                      "partial" if facts.get("pending_images") or not loading_report.get("complete", False) else "clear")
@@ -1096,6 +1110,7 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         "broken_images": {"status": images_status, "lazy_loading": facts.get("image_loading", {}),
             "failed_image_count": len(failed_images) + len(image_request_failures),
             "images": failed_images[:60], "request_failures": image_request_failures[:60],
+            "transient_request_failures": transient_image_request_failures[:60],
             "pending_images": pending_images[:30],
             "scope_note": (f"Inspected a sample of {MAX_LAZY_IMAGES} lazy-loaded images; additional lazy images do not make the audit incomplete."
                            if images_status == "sampled" else

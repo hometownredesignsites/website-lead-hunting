@@ -71,14 +71,33 @@ def script_audit_summary(candidate: dict) -> dict:
     http = checks.get("http_links_and_resources") or {}
     images = checks.get("broken_images") or {}
     lazy_loading = images.get("lazy_loading", {}) or {}
-    failed_image_count = images.get("failed_image_count", 0)
     image_request_failures = images.get("request_failures", []) or []
+    # Chromium may cancel an image request during navigation, lazy-load
+    # turnover, or screenshot capture. Keep these in diagnostics but do not
+    # treat ERR_ABORTED by itself as a confirmed broken customer image.
+    transient_image_failures = list(images.get("transient_request_failures", []) or [])
+    confirmed_request_failures = []
+    for failure in image_request_failures:
+        reason = str((failure or {}).get("failure", "")).upper()
+        if "ERR_ABORTED" in reason:
+            transient_image_failures.append(failure)
+        else:
+            confirmed_request_failures.append(failure)
+    image_request_failures = confirmed_request_failures
+    failed_image_count = int(images.get("failed_image_count", 0) or 0)
+    # Older records included all failed network requests in this count. When
+    # their only evidence is ERR_ABORTED, remove that transient contribution.
+    if transient_image_failures and not images.get("images"):
+        failed_image_count = max(0, failed_image_count - len(transient_image_failures))
     image_status = images.get("status", "not_run")
+    pending_images = images.get("pending_images", []) or []
+    pending_non_lazy = any(str((item or {}).get("loading", "")).casefold() != "lazy"
+                           for item in pending_images)
     # Apply the 20-image sample policy to older ledgers written before the
     # explicit `sampled` status existed. These sites can still be reviewed on
     # a fresh visual attempt without re-running discovery.
-    if (image_status == "partial" and
-            int(lazy_loading.get("attempted", 0) or 0) >= 20 and
+    sample_sufficient = bool(lazy_loading.get("sample_sufficient")) or int(lazy_loading.get("attempted", 0) or 0) >= 20
+    if (image_status in {"partial", "sampled"} and sample_sufficient and not pending_non_lazy and
             not failed_image_count and not image_request_failures):
         image_status = "sampled"
     forms = checks.get("contact_form_privacy") or {}
@@ -110,7 +129,8 @@ def script_audit_summary(candidate: dict) -> dict:
                 "At least 20 lazy-loaded images were inspected as a sufficient sample; additional lazy images do not make this factor uncertain."
                 if image_status == "sampled" else ""),
             "images": _limited(images.get("images")),
-            "request_failures": _limited(images.get("request_failures")),
+            "request_failures": _limited(image_request_failures),
+            "transient_request_failures": _limited(transient_image_failures),
         },
         "contact_form_privacy": {
             "status": forms.get("status", "not_run"),
@@ -283,7 +303,7 @@ def main() -> int:
     instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
 Use only the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page; the mid views are viewport crops taken at 25% of the desktop and 48% of the mobile screenshot's scrollable height. These are representative page views, not guaranteed semantic sections. A structured script audit is also supplied. Treat it as automated evidence, not as something visually verified. Base all five visual factors (hero imagery, image quality, design freshness, readability, and layout/mobile use) on the screenshots. For layout/mobile use, page-flow measurements may be cited only as supplementary context; they do not change the required source tag, which must be source=screenshots, and the visual judgment must cite a screenshot. Use script_audit evidence only as the primary source for broken images and interactions. Keep evidence sources explicit and never describe an automated finding as visually observed. Do not browse the site or infer facts not shown in the screenshots or audit. Python is the only authority for score and site outcome. Return factor evidence and severities only; do not provide any score or overall verdict. Every factor must state whether it is assessed, not_applicable, or uncertain, with a specific reason/evidence and source. If evidence text or a limitation says a factor cannot be assessed, that factor must be uncertain rather than assessed.
 
-Rate these seven fixed factors: hero_imagery (screenshots), image_quality (screenshots), design_freshness (screenshots), readability (screenshots), layout_mobile (screenshots), broken_images (script_audit), interactions (script_audit). For each, use state=assessed with severity none/minor/moderate/severe, state=not_applicable with no severity when the check truly does not apply, or state=uncertain with no severity when evidence is insufficient. Give concise, specific evidence or the reason for not_applicable/uncertain, and identify the evidence source. For broken_images, status=sampled means the audit inspected its sufficient sample of at least 20 lazy-loaded images; if failed_image_count is zero and request_failures is empty, assess this factor as none and state that the conclusion is based on the sample. Do not mark it uncertain just because more lazy images exist beyond the sample. Report actual failures when listed. A global partial audit status may reflect another bounded check and does not override this per-factor sample rule. Do not create extra scoring factors or count issue sentences. Do not include a score, overall verdict, or inferred decision. Python calculates the score and outcome from named factors: none=0, minor=5, moderate=25, severe=50; not_applicable contributes zero; uncertain on any required factor produces an Uncertain outcome with no numeric score. When the script confirms no prominent image/video/background image in the first viewport, hero imagery receives at least 45 points; this replaces weaker points for that same issue. Moderate or severe overall dated-design findings also receive at least 45 points in design_freshness, replacing that factor's weaker points. Minor isolated outdated details stay at 5 points. The total is capped at 100. Verdict bands are Pass 0-49, Medium 50-74, High 75-100. Missing factor entries, state, source, or evidence invalidate the scorecard and trigger retry.
+Rate these seven fixed factors: hero_imagery (screenshots), image_quality (screenshots), design_freshness (screenshots), readability (screenshots), layout_mobile (screenshots), broken_images (script_audit), interactions (script_audit). For each, use state=assessed with severity none/minor/moderate/severe, state=not_applicable with no severity when the check truly does not apply, or state=uncertain with no severity when evidence is insufficient. Give concise, specific evidence or the reason for not_applicable/uncertain, and identify the evidence source. For broken_images, status=sampled means the audit inspected its sufficient sample of at least 20 lazy-loaded images; if failed_image_count is zero and request_failures is empty, assess this factor as none and state that the conclusion is based on the sample. Transient request failures are listed separately and do not establish broken customer-facing imagery by themselves. Do not mark it uncertain just because more lazy images exist beyond the sample. Report confirmed failures when listed. A global partial audit status may reflect another bounded check and does not override this per-factor sample rule. Do not create extra scoring factors or count issue sentences. Do not include a score, overall verdict, or inferred decision. Python calculates the score and outcome from named factors: none=0, minor=5, moderate=25, severe=50; not_applicable contributes zero; uncertain on any required factor produces an Uncertain outcome with no numeric score. When the script confirms no prominent image/video/background image in the first viewport, hero imagery receives at least 45 points; this replaces weaker points for that same issue. Moderate or severe overall dated-design findings also receive at least 45 points in design_freshness, replacing that factor's weaker points. Minor isolated outdated details stay at 5 points. The total is capped at 100. Verdict bands are Pass 0-49, Medium 50-74, High 75-100. Missing factor entries, state, source, or evidence invalidate the scorecard and trigger retry.
 
 Use none when the factor is supported and no material weakness is present. Use minor for polish with little user impact; moderate for a clear redesign need or bounded user impact; severe for an obvious, prominent defect that substantially harms readability, trust, visual presentation, navigation, or ability to use the site. Evaluate the website as a potential redesign lead, not only as a technically functional page. For hero imagery, assess whether the first viewport has a compelling, relevant image/video that establishes the business and supports the headline or CTA. When script evidence confirms hero media is absent, identify that as script evidence and assess the text-only first view in the top screenshots; the deterministic 45-point floor applies. Use mid-view crops and page-flow measurements to report how far users scroll before meaningful project imagery appears. For image quality, look for visible blur, pixelation, stretching, poor crops, or consistently low-quality imagery; do not infer image quality from code or dimensions alone. Use minor for an isolated weak image, moderate when several prominent images are visibly poor, and severe when low-quality imagery dominates the hero or portfolio. For design freshness, judge the overall visual language using concrete screenshot evidence such as dated typography, effects, controls, spacing, iconography, or an overall style that materially looks old. Use minor for one limited outdated detail, moderate for dated patterns repeated across prominent sections, and severe when the pervasive presentation looks obsolete and materially weakens credibility. A clean, usable design need not follow current trends to rate none. A single stylistic preference is not evidence. Copyright dates are a separate weak content clue and must not determine this factor. For readability, check contrast and legibility, including text over images and text inside cards. For layout/mobile use, assess hierarchy, clutter, content organization, mobile clipping/overlap, and the presentation of the visible portfolio; keep datedness in design_freshness and do not score the same cause twice. Assess detached controls near navigation only when their position is visibly inconsistent with the layout.
 
