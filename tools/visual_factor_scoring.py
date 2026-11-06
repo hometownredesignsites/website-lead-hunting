@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v8"
+ASSESSMENT_VERSION = "fixed-factors-v9"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -128,13 +128,19 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
     sample_sufficient = bool(loading.get("sample_sufficient")) or (
         int(loading.get("attempted", 0) or 0) >= 20
     )
+    all_lazy_images_inspected = bool(loading.get("complete"))
     confirmed_failures = int(images.get("failed_image_count", 0) or 0)
-    image_sample_accepted = (image_status == "clear" or
-                             (image_status == "sampled" and sample_sufficient and not pending_non_lazy))
+    image_sample_accepted = (
+        (image_status == "clear" and not pending_non_lazy)
+        or (all_lazy_images_inspected and not pending_non_lazy)
+        or (image_status == "sampled" and sample_sufficient and not pending_non_lazy)
+    )
     if image_sample_accepted and not confirmed_failures:
         factors["broken_images"] = {
             "state": "assessed", "severity": "none",
-            "evidence": ("The script completed its image audit with no confirmed broken images."
+            "evidence": ("The script inspected every discovered lazy-loaded image and found no confirmed broken images."
+                         if all_lazy_images_inspected else
+                         "The script completed its image audit with no confirmed broken images."
                          if image_status == "clear" else
                          f"The script inspected a sufficient sample of {loading.get('attempted', 20)} lazy-loaded images; "
                          "no confirmed broken images were found."),

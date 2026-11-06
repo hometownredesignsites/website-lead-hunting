@@ -97,7 +97,9 @@ def script_audit_summary(candidate: dict) -> dict:
     # explicit `sampled` status existed. These sites can still be reviewed on
     # a fresh visual attempt without re-running discovery.
     sample_sufficient = bool(lazy_loading.get("sample_sufficient")) or int(lazy_loading.get("attempted", 0) or 0) >= 20
-    if (image_status in {"partial", "sampled"} and sample_sufficient and not pending_non_lazy and
+    every_lazy_image_inspected = bool(lazy_loading.get("complete"))
+    if (image_status in {"partial", "sampled", "issues_found"} and
+            (every_lazy_image_inspected or sample_sufficient) and not pending_non_lazy and
             not failed_image_count and not image_request_failures):
         image_status = "sampled"
     forms = checks.get("contact_form_privacy") or {}
@@ -126,6 +128,8 @@ def script_audit_summary(candidate: dict) -> dict:
             "failed_image_count": failed_image_count,
             "lazy_loading": lazy_loading,
             "scope_note": images.get("scope_note") or (
+                f"All {lazy_loading.get('attempted', 0)} discovered lazy-loaded images were inspected; no confirmed failures were found."
+                if image_status == "sampled" and every_lazy_image_inspected else
                 "At least 20 lazy-loaded images were inspected as a sufficient sample; additional lazy images do not make this factor uncertain."
                 if image_status == "sampled" else ""),
             "images": _limited(images.get("images")),
