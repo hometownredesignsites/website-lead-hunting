@@ -13,10 +13,12 @@ Each completed assessment must classify all seven factors with an explicit asses
 | Design freshness | Screenshots | Concrete signs that the overall visual language looks dated; not trend conformity |
 | Readability | Screenshots | Legibility of visible text, including text over imagery |
 | Layout and mobile use | Screenshots | Hierarchy, content organization, and desktop/mobile usability |
-| Broken images | Script audit | Failed image loads and the audit's lazy-load results |
+| Broken images | Script audit | Confirmed failed image loads and the lazy-image sample coverage |
 | Interactions | Script audit | Tested controls and interaction failures |
 
 The model must not describe script findings as visually observed. Visual observations and script evidence remain separately identified in the scorecard.
+
+For broken images, all lazy-loaded images are checked when there are 20 or fewer. If the page has more, a 20-image sample is sufficient evidence for this factor; remaining lazy images do not make the scorecard uncertain. The scorecard must report that the finding is sample-based. Only confirmed failures in the browser or network evidence count as broken images.
 
 Each factor stores `state` as `assessed`, `not_applicable`, or `uncertain`. Assessed factors also store severity (`none`, `minor`, `moderate`, or `severe`); not-applicable and uncertain factors have no severity. Every factor stores a concrete evidence statement and its required source. “No control was tested” is not evidence that controls work.
 

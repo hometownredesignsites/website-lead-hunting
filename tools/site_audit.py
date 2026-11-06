@@ -339,8 +339,12 @@ async def load_lazy_images(page) -> dict:
                 continue
         await page.evaluate("window.scrollTo(0, 0)")
         await page.wait_for_timeout(450)
+        complete = len(pending) <= MAX_LAZY_IMAGES
+        sampled = len(attempted) >= MAX_LAZY_IMAGES
         return {"attempted": len(attempted), "lazy_images_found": len(pending),
-                "complete": len(pending) <= MAX_LAZY_IMAGES}
+                "attempted_indices": attempted,
+                "complete": complete, "sample_sufficient": complete or sampled,
+                "coverage": "complete" if complete else "sampled" if sampled else "partial"}
     except Exception as exc:
         return {"attempted": 0, "lazy_images_found": None, "complete": False,
                 "error": f"{type(exc).__name__}: {exc}"[:250]}
@@ -755,7 +759,9 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         facts = await collect_dom_facts(page)
     except Exception as exc:
         return {"status": "unknown", "error": f"Could not inspect page DOM: {type(exc).__name__}: {exc}"[:300]}
-    facts["image_loading"] = image_loading or {"complete": False, "note": "Lazy-load pass was not recorded."}
+    loading_report = image_loading or {"complete": False, "sample_sufficient": False,
+                                       "note": "Lazy-load pass was not recorded."}
+    facts["image_loading"] = loading_report
 
     # Page-local fragment links can be verified without making network requests.
     anchors = facts.get("anchors", [])
@@ -832,10 +838,19 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
                                        "result": "request_failed", "source": "browser_request"})
     http_status = "issues_found" if any(row.get("result") in {"broken", "insecure_http", "request_failed"} for row in http_links) or insecure_resources else "clear"
 
-    failed_images = [{**item, "checked_after_lazy_load": bool(image_loading and image_loading.get("complete"))}
+    sample_sufficient = bool(loading_report.get("sample_sufficient"))
+    attempted_indices = {int(index) for index in loading_report.get("attempted_indices", [])}
+    failed_images = [{**item, "checked_after_lazy_load": bool(
+                        loading_report.get("complete") or
+                        (item.get("loading") == "lazy" and int(item.get("index", -1)) in attempted_indices))}
                      for item in facts.get("failed_images", [])]
     image_request_failures = [row for row in failed_events if row.get("resource_type") == "image"]
-    images_status = "issues_found" if failed_images or image_request_failures else "partial" if facts.get("pending_images") or not facts.get("image_loading", {}).get("complete", True) else "clear"
+    images_status = ("issues_found" if failed_images or image_request_failures else
+                     "sampled" if sample_sufficient and not loading_report.get("complete") else
+                     "partial" if facts.get("pending_images") or not loading_report.get("complete", False) else "clear")
+    pending_images = facts.get("pending_images", [])
+    pending_images_outside_policy = (any(item.get("loading") != "lazy" for item in pending_images)
+                                     or (pending_images and not sample_sufficient))
 
     # Inspect linked contact pages when the homepage lacks either a form or a public email.
     contact_pages = []
@@ -1068,8 +1083,9 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
             break
 
     result = {
-        "status": "partial" if len(selected) > MAX_LINK_CHECKS or facts.get("pending_images") else "completed",
+        "status": "partial" if len(selected) > MAX_LINK_CHECKS or pending_images_outside_policy else "completed",
         "limits": {"max_link_checks": MAX_LINK_CHECKS, "max_lazy_images": MAX_LAZY_IMAGES,
+                   "lazy_image_sample_minimum": MAX_LAZY_IMAGES,
                    "max_interactions": MAX_INTERACTIONS, "request_timeout_ms": REQUEST_TIMEOUT_MS},
         "http_links_and_resources": {"status": "issues_found" if http_status == "issues_found" else "clear",
             "http_link_count": len(http_anchor_records), "http_links": http_links[:300],
@@ -1080,7 +1096,14 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         "broken_images": {"status": images_status, "lazy_loading": facts.get("image_loading", {}),
             "failed_image_count": len(failed_images) + len(image_request_failures),
             "images": failed_images[:60], "request_failures": image_request_failures[:60],
-            "pending_images": facts.get("pending_images", [])[:30]},
+            "pending_images": pending_images[:30],
+            "scope_note": (f"Inspected a sample of {MAX_LAZY_IMAGES} lazy-loaded images; additional lazy images do not make the audit incomplete."
+                           if images_status == "sampled" else
+                           "All discovered lazy-loaded images were included in the bounded pass."
+                           if images_status == "clear" else
+                           "The minimum lazy-image sample was not reached or non-lazy images remain unresolved."
+                           if images_status == "partial" else
+                           "One or more image failures were confirmed by browser or network evidence.")},
         "contact_form_privacy": form_privacy,
         "contact_email_opportunity": email_opportunity,
         "broken_links_and_interactions": {"status": "issues_found" if broken_links or fragment_issues or interactions["status"] == "issues_found" or console_errors else "clear",
