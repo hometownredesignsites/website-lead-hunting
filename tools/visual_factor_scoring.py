@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v10"
+ASSESSMENT_VERSION = "fixed-factors-v11"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -116,29 +116,44 @@ def has_complete_response_scorecard(response_text: str, review: dict | None = No
     return True
 
 
-def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
-    """Prevent unavailable automated checks from being rated as clean."""
-    hero = audit.get("hero_media") or {}
-    hero_views = [hero.get("desktop") or {}, hero.get("mobile") or {}]
-    hero_video_present = any(
-        str(media.get("type", "")).casefold() == "video"
-        and (media.get("prominent") is True or (
-            float(media.get("visibleWidth", media.get("width", 0)) or 0) >= 120
-            and float(media.get("visibleHeight", media.get("height", 0)) or 0) >= 90
-            and float(media.get("viewportAreaPercent", media.get("viewport_area_percent", 0)) or 0) >= 8
-        ))
-        for view in hero_views
-        for media in (view.get("media_candidates") or [])
-        if isinstance(media, dict)
+def has_prominent_first_view_video(audit: dict | None) -> bool:
+    """Recognize a substantial first-view video even when no frame decoded."""
+    hero = (audit or {}).get("hero_media") or {}
+    for view in (hero.get("desktop") or {}, hero.get("mobile") or {}):
+        for media in view.get("media_candidates") or []:
+            if not isinstance(media, dict) or str(media.get("type", "")).casefold() != "video":
+                continue
+            try:
+                width = float(media.get("visibleWidth", media.get("width", 0)) or 0)
+                height = float(media.get("visibleHeight", media.get("height", 0)) or 0)
+                area_percent = float(media.get("viewportAreaPercent", media.get("viewport_area_percent", 0)) or 0)
+            except (TypeError, ValueError):
+                continue
+            if media.get("prominent") is True or (width >= 120 and height >= 90 and area_percent >= 8):
+                return True
+    return False
+
+
+def apply_first_view_video_overrides(factors: dict, audit: dict | None) -> bool:
+    """Make a qualifying hero video neutral for hero and image-quality factors."""
+    if not has_prominent_first_view_video(audit):
+        return False
+    evidence = (
+        "Script measurements identify a substantial video element in the first viewport. Per the rubric, it is "
+        "assumed to play and can show multiple examples; hero imagery and image quality therefore pass with zero "
+        "points, even when Chromium did not decode a frame or the still screenshots omit project photos."
     )
-    if hero_video_present:
-        factors["hero_imagery"] = {
-            "state": "assessed", "severity": "none",
-            "evidence": ("The first-viewport screenshots are paired with script measurements confirming a prominent "
-                         "video element. Per the hero-video rule, video is treated as playing media and "
-                         "hero imagery receives zero points."),
+    for key in ("hero_imagery", "image_quality"):
+        factors[key] = {
+            "state": "assessed", "severity": "none", "evidence": evidence,
             "source": "screenshots_and_script_audit",
         }
+    return True
+
+
+def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
+    """Prevent unavailable automated checks from being rated as clean."""
+    apply_first_view_video_overrides(factors, audit)
     image_status = (audit.get("broken_images") or {}).get("status", "not_run")
     images = audit.get("broken_images") or {}
     loading = images.get("lazy_loading") or {}
@@ -210,6 +225,11 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
 
 def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
     """Validate factor evidence and apply deterministic floors for major redesign signals."""
+    factors = dict(factors or {})
+    hero_video_present = apply_first_view_video_overrides(factors, audit or {})
+    hero = (audit or {}).get("hero_media") or {}
+    hero_status = "present" if hero_video_present else str(hero.get("status", "unknown")).casefold()
+    hero_absence_points = 45 if hero_status == "absent" else 0
     normalized = {}
     errors = []
     uncertain = []
@@ -253,27 +273,15 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
             "reported_source": reported_source,
         }
     if errors:
-        return {"errors": errors, "factors": normalized, "score": None, "verdict": "uncertain", "uncertain_factors": uncertain}
+        return {"errors": errors, "factors": normalized, "score": None, "verdict": "uncertain",
+                "uncertain_factors": uncertain, "hero_media_status": hero_status,
+                "hero_media_absence_points": hero_absence_points, "hero_video_present": hero_video_present}
     if uncertain:
-        return {"errors": [], "factors": normalized, "score": None, "verdict": "uncertain", "uncertain_factors": uncertain}
+        return {"errors": [], "factors": normalized, "score": None, "verdict": "uncertain",
+                "uncertain_factors": uncertain, "hero_media_status": hero_status,
+                "hero_media_absence_points": hero_absence_points, "hero_video_present": hero_video_present}
     points = {key: SEVERITY_POINTS[item["severity"]] if item["state"] == "assessed" else 0
               for key, item in normalized.items()}
-    hero = (audit or {}).get("hero_media") or {}
-    hero_status = str(hero.get("status", "unknown")).casefold()
-    hero_video_present = any(
-        str(media.get("type", "")).casefold() == "video"
-        and (media.get("prominent") is True or (
-            float(media.get("visibleWidth", media.get("width", 0)) or 0) >= 120
-            and float(media.get("visibleHeight", media.get("height", 0)) or 0) >= 90
-            and float(media.get("viewportAreaPercent", media.get("viewport_area_percent", 0)) or 0) >= 8
-        ))
-        for view in (hero.get("desktop") or {}, hero.get("mobile") or {})
-        for media in (view.get("media_candidates") or [])
-        if isinstance(media, dict)
-    )
-    if hero_video_present:
-        hero_status = "present"
-    hero_absence_points = 45 if hero_status == "absent" else 0
     dated_design_severity = normalized["design_freshness"]["severity"]
     dated_design_floor_points = 45 if dated_design_severity in {"moderate", "severe"} else 0
     copyright_signal = (audit or {}).get("copyright_footer_signal") or {}

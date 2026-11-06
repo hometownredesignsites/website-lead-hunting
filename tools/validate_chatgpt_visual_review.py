@@ -9,7 +9,8 @@ from pathlib import Path
 
 from playwright_runner.prompt_contracts import extract_json_payload
 from visual_factor_scoring import (ASSESSMENT_VERSION, FACTORS, enforce_script_audit_evidence,
-                                   normalize_and_score, parse_factor_assessments)
+                                   has_prominent_first_view_video, normalize_and_score,
+                                   parse_factor_assessments)
 
 
 SECTION_KEYS = {
@@ -133,12 +134,17 @@ def main() -> int:
             errors.append("model response declares the final result uncertain; express uncertainty on the relevant factor instead")
         factors = parse_factor_assessments(response_text, review)
         audit = context.get("script_audit") or {}
+        hero_video_present = has_prominent_first_view_video(audit)
         enforce_script_audit_evidence(factors, audit)
         scorecard = normalize_and_score(factors, audit)
         review["factor_assessments"] = scorecard["factors"]
         errors.extend(scorecard["errors"])
         for key, factor in scorecard["factors"].items():
             if factor.get("state") == "uncertain":
+                continue
+            # The deterministic video rule supersedes uncertainty about still
+            # photos: an in-view hero video is assumed to play and show work.
+            if key == "image_quality" and hero_video_present:
                 continue
             label = re.escape(FACTORS[key])
             if key == "interactions":
@@ -156,11 +162,11 @@ def main() -> int:
         review["review_execution_status"] = "completed"
         review["score_calibration"] = {
             "version": ASSESSMENT_VERSION,
-            "method": "Python-only sum of assessed factor points; not_applicable factors contribute zero; uncertain factors produce a null score and uncertain site outcome; prominent first-viewport video forces hero-imagery points to zero; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor; displayed copyright year 1-2 years old adds 5 points, more than 2 years old adds 10; none=0, minor=5, moderate=25, severe=50; capped at 100",
+            "method": "Python-only sum of assessed factor points; not_applicable factors contribute zero; uncertain factors produce a null score and uncertain site outcome; prominent first-viewport video forces hero-imagery and image-quality points to zero; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor; displayed copyright year 1-2 years old adds 5 points, more than 2 years old adds 10; none=0, minor=5, moderate=25, severe=50; capped at 100",
             "factor_points": {key: {"state": scorecard["factors"][key]["state"], "severity": scorecard["factors"][key]["severity"], "points": value} for key, value in scorecard.get("factor_points", {}).items()},
             "hero_media_status": scorecard.get("hero_media_status"),
             "hero_media_absence_points": scorecard.get("hero_media_absence_points", 0),
-            "hero_video_present": scorecard.get("hero_video_present", False),
+            "hero_video_present": scorecard.get("hero_video_present", hero_video_present),
             "dated_design_floor_points": scorecard.get("dated_design_floor_points", 0),
             "stale_copyright_points": scorecard.get("stale_copyright_points", 0),
             "uncertain_factors": scorecard["uncertain_factors"],
