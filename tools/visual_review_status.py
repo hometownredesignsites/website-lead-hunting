@@ -38,6 +38,12 @@ PERMANENT_RUNNER_MARKERS = (
     "permission denied",
     "syntaxerror",
 )
+AUTHENTICATION_REQUIRED_MARKERS = (
+    "sign in to continue",
+    "sign-in gate",
+    "requires sign-in",
+    "authentication required",
+)
 
 
 def classify_attempt(
@@ -82,6 +88,20 @@ def classify_attempt(
     if isinstance(errors, str):
         errors = [errors]
     errors = [str(error) for error in errors] if isinstance(errors, list) else []
+    log_lower = runner_log_text.lower()
+    error_text = " ".join(errors).lower()
+    authentication_marker = next(
+        (marker for marker in AUTHENTICATION_REQUIRED_MARKERS
+         if marker in log_lower or marker in error_text),
+        None,
+    )
+    if authentication_marker:
+        return {
+            "status": FAIL,
+            "retryable": False,
+            "failure_class": "chatgpt_authentication_required",
+            "error": "ChatGPT requires sign-in; a fresh guest session cannot recover this state.",
+        }
     identity_error = next((error for error in errors
                            if any(marker in error for marker in IDENTITY_ERRORS)), None)
     if identity_error:
@@ -99,7 +119,6 @@ def classify_attempt(
         return {"status": RETRY, "retryable": True, "failure_class": failure_class,
                 "error": "; ".join(errors)}
 
-    log_lower = runner_log_text.lower()
     permanent_marker = next((marker for marker in PERMANENT_RUNNER_MARKERS if marker in log_lower), None)
     if permanent_marker:
         return {"status": FAIL, "retryable": False,

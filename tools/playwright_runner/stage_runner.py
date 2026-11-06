@@ -15,7 +15,7 @@ from .browser_session import (
 )
 from .diagnostics import save_failure_diagnostics
 from .prompt_contracts import extract_json_payload
-from .recovery import click_retry_if_visible, refresh_chat
+from .recovery import click_new_chat_button_if_visible, click_retry_if_visible, refresh_chat
 from visual_factor_scoring import has_complete_response_scorecard
 
 
@@ -51,6 +51,10 @@ def run_stage_once(
         "image_attachments": [],
         "response_followup_used": False,
         "response_followup_reason": None,
+        "new_chat_fallback_attempted": False,
+        "new_chat_button_clicked": False,
+        "new_chat_images_reattached": False,
+        "new_chat_prompt_reissued": False,
     }
     start = time.time()
 
@@ -122,9 +126,34 @@ def run_stage_once(
             metadata["response_followup_reason"] = followup_reason
             followup_composer = find_chat_composer(page, timeout_ms=timeout_ms)
             if followup_composer is None:
-                raise ResponseFollowupError(
-                    "ChatGPT response needed a follow-up, but no composer was available in the same chat."
-                )
+                metadata["new_chat_fallback_attempted"] = True
+                metadata["new_chat_button_clicked"] = click_new_chat_button_if_visible(page)
+                if metadata["new_chat_button_clicked"]:
+                    metadata["new_chat_started"] = True
+                    metadata["thread_reused"] = False
+                    followup_composer = find_chat_composer(page, timeout_ms=timeout_ms)
+                    if followup_composer is not None and image_files:
+                        metadata["image_attachments"] = attach_image_files(
+                            page, image_files, timeout_ms=timeout_ms
+                        )
+                        if len(metadata["image_attachments"]) == 1:
+                            metadata["image_attachment"] = metadata["image_attachments"][0]
+                        metadata["new_chat_images_reattached"] = True
+                if followup_composer is None:
+                    sign_in_gate = False
+                    try:
+                        sign_in_gate = page.get_by_text(
+                            "Sign in to continue", exact=True
+                        ).first.is_visible()
+                    except Exception:
+                        pass
+                    if sign_in_gate:
+                        raise ResponseFollowupError(
+                            "ChatGPT displayed 'Sign in to continue'; clicking New chat did not restore a guest composer."
+                        )
+                    raise ResponseFollowupError(
+                        "ChatGPT response needed a follow-up, but no composer was available after the New chat fallback."
+                    )
             followup_messages = assistant_turns(page)
             followup_before_count = followup_messages.count()
             followup_before_last_text = ""
@@ -133,7 +162,12 @@ def run_stage_once(
                     followup_before_last_text = followup_messages.last.inner_text().strip()
                 except Exception:
                     followup_before_last_text = ""
-            if followup_reason == "empty_response":
+            if metadata["new_chat_started"]:
+                # A new thread has none of the candidate context or rubric from the
+                # previous thread, so resend the full prompt with the screenshots.
+                followup_prompt = prompt_text
+                metadata["new_chat_prompt_reissued"] = True
+            elif followup_reason == "empty_response":
                 followup_prompt = (
                     "Your previous response was empty. Please retry the visual assessment using the four "
                     "screenshots already attached and the candidate context in this chat. Follow the original "

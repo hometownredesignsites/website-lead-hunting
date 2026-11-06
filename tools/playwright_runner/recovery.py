@@ -34,18 +34,11 @@ def click_retry_if_visible(page) -> bool:
     return False
 
 
-def start_new_chat_if_available(page, timeout_ms: int) -> bool:
-    try:
-        page.keyboard.press("Control+Shift+O")
-        page.wait_for_timeout(1200)
-        composer = find_chat_composer(page, timeout_ms=1500)
-        if composer is not None:
-            return True
-    except Exception:
-        pass
-
+def click_new_chat_button_if_visible(page) -> bool:
+    """Click a visible New chat control once and report whether it was clicked."""
     selectors = [
         "[data-testid='create-new-chat-button']",
+        "button[aria-label='New chat']",
         "button:has-text('New chat')",
         "a:has-text('New chat')",
         "a[href*='new-chat']",
@@ -56,11 +49,24 @@ def start_new_chat_if_available(page, timeout_ms: int) -> bool:
             if candidate.count() > 0 and candidate.is_visible():
                 candidate.click()
                 page.wait_for_timeout(1200)
-                composer = find_chat_composer(page, timeout_ms=timeout_ms)
-                if composer is not None:
-                    return True
+                return True
         except Exception:
             continue
+    return False
+
+
+def start_new_chat_if_available(page, timeout_ms: int) -> bool:
+    try:
+        page.keyboard.press("Control+Shift+O")
+        page.wait_for_timeout(1200)
+        composer = find_chat_composer(page, timeout_ms=1500)
+        if composer is not None:
+            return True
+    except Exception:
+        pass
+
+    if click_new_chat_button_if_visible(page):
+        return find_chat_composer(page, timeout_ms=timeout_ms) is not None
     return False
 
 
