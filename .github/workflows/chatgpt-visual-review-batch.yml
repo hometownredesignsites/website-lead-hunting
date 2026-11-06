@@ -283,23 +283,28 @@ jobs:
           REVIEW_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID"
           ATTEMPT_ROOT="$REVIEW_DIR/attempts"
           mkdir -p "$ATTEMPT_ROOT"
+          MAX_REPLICATE_RETRIES=2
           for replicate in 1 2 3; do
             ATTEMPT_DIR="$ATTEMPT_ROOT/$replicate"
-            mkdir -p "$ATTEMPT_DIR"
-            review_rc=0
-            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            mkdir -p "$ATTEMPT_DIR/sessions"
+            terminal_status=""
+            for session_attempt in 1 2 3; do
+              SESSION_DIR="$ATTEMPT_DIR/sessions/$session_attempt"
+              mkdir -p "$SESSION_DIR"
+              review_rc=0
+              xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
               python tools/chatgpt_file_playwright_anonymous_ci.py \
-                --stage-name chatgpt_visual_review_replicate_$replicate \
+                --stage-name chatgpt_visual_review_replicate_${replicate}_attempt_${session_attempt} \
                 --input-file "$REVIEW_DIR/website-review/prompt.txt" \
                 --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
                 --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
-                --output-file "$ATTEMPT_DIR/response.md" \
-                --metadata-output-file "$ATTEMPT_DIR/metadata.json" \
-                --success-screenshot "$ATTEMPT_DIR/chatgpt-response.png" \
-                --error-screenshot "$ATTEMPT_DIR/chatgpt-error.png" \
+                --output-file "$SESSION_DIR/response.md" \
+                --metadata-output-file "$SESSION_DIR/metadata.json" \
+                --success-screenshot "$SESSION_DIR/chatgpt-response.png" \
+                --error-screenshot "$SESSION_DIR/chatgpt-error.png" \
                 --network-log \
-                --network-log-file "$ATTEMPT_DIR/chatgpt-network.log" \
-                --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-$replicate" \
+                --network-log-file "$SESSION_DIR/chatgpt-network.log" \
+                --user-data-dir "tmp/chatgpt-visual-review-profile-$REVIEW_CANDIDATE_ID-${replicate}-${session_attempt}" \
                 --allow-retry \
                 --refresh-before-retry \
                 --wait-seconds 70 \
@@ -312,23 +317,24 @@ jobs:
                 --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
                 --image-file "$REVIEW_DIR/website-review/mobile_top.jpg" \
                 --image-file "$REVIEW_DIR/website-review/mobile_mid.jpg" \
-                > "$ATTEMPT_DIR/runner.log" 2>&1 || review_rc=$?
+                > "$SESSION_DIR/runner.log" 2>&1 || review_rc=$?
 
-            if [[ "$review_rc" -eq 0 ]]; then
-              python tools/validate_chatgpt_visual_review.py \
-                --response "$ATTEMPT_DIR/response.md" \
-                --metadata "$ATTEMPT_DIR/metadata.json" \
-                --context "$REVIEW_DIR/website-review/candidate-context.json" \
-                --output "$ATTEMPT_DIR/review-result.json" \
-                > "$ATTEMPT_DIR/validation.log" 2>&1 || review_rc=$?
-            fi
+              if [[ "$review_rc" -eq 0 ]]; then
+                python tools/validate_chatgpt_visual_review.py \
+                  --response "$SESSION_DIR/response.md" \
+                  --metadata "$SESSION_DIR/metadata.json" \
+                  --context "$REVIEW_DIR/website-review/candidate-context.json" \
+                  --output "$SESSION_DIR/review-result.json" \
+                  > "$SESSION_DIR/validation.log" 2>&1 || review_rc=$?
+              fi
 
-            python - "$ATTEMPT_DIR" "$review_rc" <<'PY'
+              python - "$SESSION_DIR" "$review_rc" "$session_attempt" <<'PY'
           import json, sys
           from pathlib import Path
           from tools.visual_review_status import classify_attempt
           attempt_dir = Path(sys.argv[1])
           exit_code = int(sys.argv[2])
+          attempt_number = int(sys.argv[3])
           result_path = attempt_dir / "review-result.json"
           result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
           runner_log_path = attempt_dir / "runner.log"
@@ -340,10 +346,24 @@ jobs:
               result=result,
               runner_log_text=runner_log,
           )
-          decision["attempt"] = int(attempt_dir.name)
+          decision["attempt"] = attempt_number
           (attempt_dir / "attempt-status.json").write_text(json.dumps(decision, indent=2) + "\n", encoding="utf-8")
           print(decision["status"])
           PY
+              terminal_status=$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "retry-needed"))' "$SESSION_DIR/attempt-status.json")
+              for file in response.md metadata.json chatgpt-response.png chatgpt-error.png chatgpt-network.log runner.log validation.log review-result.json; do
+                [[ -f "$SESSION_DIR/$file" ]] && cp "$SESSION_DIR/$file" "$ATTEMPT_DIR/$file"
+              done
+              cp "$SESSION_DIR/attempt-status.json" "$ATTEMPT_DIR/attempt-status.json"
+              if [[ "$terminal_status" == "passed" ]]; then
+                break
+              fi
+              retryable=$(python -c 'import json,sys; print("true" if json.load(open(sys.argv[1], encoding="utf-8")).get("retryable") else "false")' "$SESSION_DIR/attempt-status.json")
+              if [[ "$retryable" != "true" || "$session_attempt" -gt "$MAX_REPLICATE_RETRIES" ]]; then
+                break
+              fi
+              echo "Replicate $replicate failed recoverably; starting fresh session retry $((session_attempt + 1))/$((MAX_REPLICATE_RETRIES + 1))."
+            done
           done
 
           aggregate_rc=0
