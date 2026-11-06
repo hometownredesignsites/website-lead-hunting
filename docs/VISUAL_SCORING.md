@@ -29,6 +29,8 @@ The validator calculates the score from these fixed factor ratings, not from how
 
 `score = min(100, sum(points for the five factors))`
 
+There is no post-assessment Duck.ai multiplier, offset, or provider-alignment adjustment. The model-reported score and verdict are retained for audit only; Python calculates the durable score solely from the five validated factor severities. The score is not shifted to imitate ChatGPT results.
+
 Verdict bands remain Pass 0–49, Medium 50–74, and High 75–100. The model-reported score/verdict are retained separately; the validator-calculated score and verdict are authoritative.
 
 If a factor is explicitly `not_assessable`, the result is Uncertain with a null score. Missing factor ratings or supporting evidence invalidate the scorecard and trigger the existing failure/retry path. The validator never silently assigns zero to missing evidence.
