@@ -46,7 +46,7 @@ on:
       sites_per_query:
         description: Direct sites to assess per query (1-10; used when starting)
         required: true
-        default: "3"
+        default: "10"
         type: choice
         options:
           - "1"

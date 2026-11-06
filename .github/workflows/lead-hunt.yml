@@ -29,7 +29,7 @@ on:
       max_sites_per_query:
         description: "Direct business websites to assess per query (1-10)"
         required: true
-        default: "3"
+        default: "10"
         type: choice
         options:
           - "1"

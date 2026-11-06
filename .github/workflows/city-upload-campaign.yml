@@ -28,7 +28,7 @@ on:
       max_sites_per_query:
         description: "Maximum direct business websites assessed per city query"
         required: true
-        default: "3"
+        default: "10"
         type: choice
         options: ["1", "2", "3", "5", "8", "10"]
       category_index:
@@ -95,7 +95,7 @@ jobs:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_CAMPAIGN_KEY: ${{ inputs.campaign_key }}
           INPUT_REGION: ${{ inputs.region || 'Indiana' }}
-          INPUT_MAX_SITES: ${{ inputs.max_sites_per_query || '3' }}
+          INPUT_MAX_SITES: ${{ inputs.max_sites_per_query || '10' }}
           INPUT_CATEGORY_INDEX: ${{ inputs.category_index || '0' }}
           INPUT_CHILD_RUN_ID: ${{ inputs.child_run_id }}
           INPUT_CHILD_CONCLUSION: ${{ inputs.child_conclusion }}

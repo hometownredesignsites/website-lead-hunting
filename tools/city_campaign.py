@@ -384,7 +384,7 @@ def main() -> int:
     parser.add_argument("--region", default="Indiana")
     parser.add_argument("--categories-csv", type=Path, default=Path("config/business_categories.csv"))
     parser.add_argument("--cities-csv", type=Path, default=Path("config/cities.csv"))
-    parser.add_argument("--max-sites-per-query", type=int, default=3)
+    parser.add_argument("--max-sites-per-query", type=int, default=10)
     parser.add_argument("--category-index", type=int, default=0,
                         help="Optional one-based category row; use 0 to run the complete catalog")
     parser.add_argument("--child-run-id", default="")

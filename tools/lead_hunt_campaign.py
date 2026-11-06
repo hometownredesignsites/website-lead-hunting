@@ -286,7 +286,7 @@ def main() -> int:
     parser.add_argument("--run-key", default="")
     parser.add_argument("--region", default="")
     parser.add_argument("--max-queries", type=int, default=5)
-    parser.add_argument("--max-sites-per-query", type=int, default=3)
+    parser.add_argument("--max-sites-per-query", type=int, default=10)
     parser.add_argument("--max-retries", type=int, default=MAX_RETRIES)
     parser.add_argument("--capture-google-evidence", action="store_true")
     parser.add_argument("--categories-csv", type=Path, default=Path("config/business_categories.csv"))

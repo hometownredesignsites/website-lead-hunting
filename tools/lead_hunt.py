@@ -1345,7 +1345,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--region", required=True)
     parser.add_argument("--state-dir", required=True, type=Path, help="Persistent run directory inside the repository")
     parser.add_argument("--max-queries", type=int, default=3, help="Maximum pending queries this invocation processes (1-20)")
-    parser.add_argument("--max-sites-per-query", type=int, default=3, help="Maximum direct websites checked per query (1-10)")
+    parser.add_argument("--max-sites-per-query", type=int, default=10, help="Maximum direct websites checked per query (1-10)")
     return parser.parse_args()
 
 
