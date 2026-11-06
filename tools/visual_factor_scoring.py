@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v9"
+ASSESSMENT_VERSION = "fixed-factors-v10"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -118,6 +118,27 @@ def has_complete_response_scorecard(response_text: str, review: dict | None = No
 
 def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
     """Prevent unavailable automated checks from being rated as clean."""
+    hero = audit.get("hero_media") or {}
+    hero_views = [hero.get("desktop") or {}, hero.get("mobile") or {}]
+    hero_video_present = any(
+        str(media.get("type", "")).casefold() == "video"
+        and (media.get("prominent") is True or (
+            float(media.get("visibleWidth", media.get("width", 0)) or 0) >= 120
+            and float(media.get("visibleHeight", media.get("height", 0)) or 0) >= 90
+            and float(media.get("viewportAreaPercent", media.get("viewport_area_percent", 0)) or 0) >= 8
+        ))
+        for view in hero_views
+        for media in (view.get("media_candidates") or [])
+        if isinstance(media, dict)
+    )
+    if hero_video_present:
+        factors["hero_imagery"] = {
+            "state": "assessed", "severity": "none",
+            "evidence": ("The first-viewport screenshots are paired with script measurements confirming a prominent "
+                         "video element. Per the hero-video rule, video is treated as playing media and "
+                         "hero imagery receives zero points."),
+            "source": "screenshots_and_script_audit",
+        }
     image_status = (audit.get("broken_images") or {}).get("status", "not_run")
     images = audit.get("broken_images") or {}
     loading = images.get("lazy_loading") or {}
@@ -239,6 +260,19 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
               for key, item in normalized.items()}
     hero = (audit or {}).get("hero_media") or {}
     hero_status = str(hero.get("status", "unknown")).casefold()
+    hero_video_present = any(
+        str(media.get("type", "")).casefold() == "video"
+        and (media.get("prominent") is True or (
+            float(media.get("visibleWidth", media.get("width", 0)) or 0) >= 120
+            and float(media.get("visibleHeight", media.get("height", 0)) or 0) >= 90
+            and float(media.get("viewportAreaPercent", media.get("viewport_area_percent", 0)) or 0) >= 8
+        ))
+        for view in (hero.get("desktop") or {}, hero.get("mobile") or {})
+        for media in (view.get("media_candidates") or [])
+        if isinstance(media, dict)
+    )
+    if hero_video_present:
+        hero_status = "present"
     hero_absence_points = 45 if hero_status == "absent" else 0
     dated_design_severity = normalized["design_freshness"]["severity"]
     dated_design_floor_points = 45 if dated_design_severity in {"moderate", "severe"} else 0
@@ -253,6 +287,10 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
         # The missing first-view image/video is one named issue. It replaces a
         # weaker model rating for that same root cause and never double-counts it.
         points["hero_imagery"] = max(points.get("hero_imagery", 0), hero_absence_points)
+    if hero_video_present:
+        # User rubric: a prominent first-view video is assumed to play and
+        # makes the hero-imagery factor neutral regardless of model judgment.
+        points["hero_imagery"] = 0
     if dated_design_floor_points:
         # A materially dated overall design is independently a substantial
         # redesign opportunity, on par with a confirmed missing hero image.
@@ -262,6 +300,7 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
     return {"errors": [], "factors": normalized, "factor_points": points,
             "hero_media_absence_points": hero_absence_points,
             "hero_media_status": hero_status,
+            "hero_video_present": hero_video_present,
             "dated_design_floor_points": dated_design_floor_points,
             "stale_copyright_points": stale_copyright_points,
             "score": score, "verdict": verdict, "uncertain_factors": []}

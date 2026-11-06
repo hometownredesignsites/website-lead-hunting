@@ -156,10 +156,11 @@ def main() -> int:
         review["review_execution_status"] = "completed"
         review["score_calibration"] = {
             "version": ASSESSMENT_VERSION,
-            "method": "Python-only sum of assessed factor points; not_applicable factors contribute zero; uncertain factors produce a null score and uncertain site outcome; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor; displayed copyright year 1-2 years old adds 5 points, more than 2 years old adds 10; none=0, minor=5, moderate=25, severe=50; capped at 100",
+            "method": "Python-only sum of assessed factor points; not_applicable factors contribute zero; uncertain factors produce a null score and uncertain site outcome; prominent first-viewport video forces hero-imagery points to zero; confirmed first-viewport hero-media absence and moderate/severe dated design each receive at least 45 points within their own factor; displayed copyright year 1-2 years old adds 5 points, more than 2 years old adds 10; none=0, minor=5, moderate=25, severe=50; capped at 100",
             "factor_points": {key: {"state": scorecard["factors"][key]["state"], "severity": scorecard["factors"][key]["severity"], "points": value} for key, value in scorecard.get("factor_points", {}).items()},
             "hero_media_status": scorecard.get("hero_media_status"),
             "hero_media_absence_points": scorecard.get("hero_media_absence_points", 0),
+            "hero_video_present": scorecard.get("hero_video_present", False),
             "dated_design_floor_points": scorecard.get("dated_design_floor_points", 0),
             "stale_copyright_points": scorecard.get("stale_copyright_points", 0),
             "uncertain_factors": scorecard["uncertain_factors"],

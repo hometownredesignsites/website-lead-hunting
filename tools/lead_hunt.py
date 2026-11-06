@@ -525,11 +525,17 @@ async def page_metrics(page) -> dict:
         if (!area) return;
         const areaPercent = Math.round(area * 1000 / Math.max(1, viewport.width * viewport.height)) / 10;
         const loaded = type === 'image' ? naturalWidth > 0 : type === 'video' ? naturalWidth > 0 : null;
+        // A visible video element is media even when Chromium has not decoded a
+        // frame (autoplay policies and capture timing commonly leave videoWidth=0).
+        // Treating that as absence incorrectly adds the missing-hero score floor.
+        const videoPresent = type === 'video';
+        const prominent = r.visibleWidth >= 120 && r.visibleHeight >= 90 && areaPercent >= 8 &&
+          (type === 'video' || loaded !== false);
         media.push({type, x:r.x, y:r.y, width:r.width, height:r.height,
           visibleWidth:r.visibleWidth, visibleHeight:r.visibleHeight, viewportAreaPercent:areaPercent,
           naturalWidth, naturalHeight, loaded, alt:(alt || '').trim().slice(0,180),
           relation_to_headline:relativeTo(r, headlineRect), relation_to_primary_cta:relativeTo(r, ctaRect),
-          prominent:r.visibleWidth >= 120 && r.visibleHeight >= 90 && areaPercent >= 8 && loaded !== false});
+          video_present:videoPresent, prominent});
       };
       for (const img of document.querySelectorAll('img')) if (visible(img))
         pushMedia(img, 'image', img.naturalWidth || 0, img.naturalHeight || 0, img.alt || '');

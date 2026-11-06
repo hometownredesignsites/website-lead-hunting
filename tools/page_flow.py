@@ -14,13 +14,17 @@ async def inspect_page_flow(page) -> dict:
         const r = el.getBoundingClientRect(), s = getComputedStyle(el);
         const width = Math.round(r.width), height = Math.round(r.height);
         const loaded = el.tagName === 'IMG' ? el.complete && el.naturalWidth > 0 : el.videoWidth > 0;
+        // Keep visible video elements in page-flow targeting even when no frame
+        // decoded yet; their geometry still identifies a useful capture target.
+        const mediaPresent = el.tagName === 'VIDEO' || loaded;
         const inHeader = !!el.closest('header, nav, [role="banner"]');
-        return {el, width, height, loaded, inHeader, visible: s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > .05};
-      }).filter(x => x.visible && x.loaded && !x.inHeader && x.width >= 160 && x.height >= 100)
+        return {el, width, height, loaded, mediaPresent, inHeader, visible: s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > .05};
+      }).filter(x => x.visible && x.mediaPresent && !x.inHeader && x.width >= 160 && x.height >= 100)
         .sort((a,b) => absRect(a.el).document_y - absRect(b.el).document_y);
       const images = imageItems.slice(0, 30).map(x => ({...absRect(x.el),
         type: x.el.tagName.toLowerCase(), alt: (x.el.getAttribute('alt') || x.el.getAttribute('aria-label') || '').slice(0,180),
         src: (x.el.currentSrc || x.el.getAttribute('src') || '').slice(0,500),
+        frame_loaded: x.loaded,
         viewport_transitions: Math.ceil(absRect(x.el).document_y / Math.max(1, viewportHeight))}));
       const forms = [...document.querySelectorAll('form,[role="form"]')].filter(el => {
         const r=el.getBoundingClientRect(), s=getComputedStyle(el);
@@ -44,7 +48,7 @@ async def inspect_page_flow(page) -> dict:
       const heroMedia=[];
       const addHero=(el,type,loaded=null)=>{const r=el.getBoundingClientRect(),s=getComputedStyle(el);if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity||1)<=.05)return;
         const w=Math.min(innerWidth,r.right)-Math.max(0,r.left),h=Math.min(viewportHeight,r.bottom)-Math.max(0,r.top),area=w*h*100/Math.max(1,innerWidth*viewportHeight);
-        if(w>=120&&h>=90&&area>=8&&loaded!==false)heroMedia.push({type,...absRect(el),viewport_area_percent:Math.round(area*10)/10,loaded});};
+        if(w>=120&&h>=90&&area>=8&&(type==='video'||loaded!==false))heroMedia.push({type,...absRect(el),viewport_area_percent:Math.round(area*10)/10,loaded,video_present:type==='video'});};
       for(const el of document.querySelectorAll('img,video')){const loaded=el.tagName==='IMG'?el.complete&&el.naturalWidth>0:el.videoWidth>0;addHero(el,el.tagName.toLowerCase(),loaded);}
       for(const el of [document.body,...document.querySelectorAll('body *')].slice(0,1600))if(/url\\s*\\(/i.test(getComputedStyle(el).backgroundImage||''))addHero(el,'background_image');
       return {viewport:{width:innerWidth,height:viewportHeight},
