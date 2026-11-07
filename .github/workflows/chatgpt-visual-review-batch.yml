@@ -189,7 +189,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Three required replicates may each use up to three isolated sessions.
     # Allow the bounded retry budget to finish instead of canceling mid-scorecard.
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 2
