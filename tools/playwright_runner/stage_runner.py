@@ -23,6 +23,13 @@ class ResponseFollowupError(RuntimeError):
     """Raised when ChatGPT stays silent after a same-chat text follow-up."""
 
 
+def _chatgpt_requires_sign_in(page) -> bool:
+    try:
+        return page.get_by_text("Sign in to continue", exact=True).first.is_visible()
+    except Exception:
+        return False
+
+
 def run_stage_once(
     page,
     timeout_ms: int,
@@ -89,6 +96,10 @@ def run_stage_once(
             pass
 
     def _single_attempt():
+        if _chatgpt_requires_sign_in(page):
+            raise ResponseFollowupError(
+                "ChatGPT sign-in gate: sign in to continue; guest review cannot proceed."
+            )
         composer = find_chat_composer(page, timeout_ms=timeout_ms)
         if composer is None:
             raise RuntimeError("Could not find composer for stage execution.")
@@ -124,6 +135,10 @@ def run_stage_once(
         if followup_reason:
             metadata["response_followup_used"] = True
             metadata["response_followup_reason"] = followup_reason
+            if _chatgpt_requires_sign_in(page):
+                raise ResponseFollowupError(
+                    "ChatGPT sign-in gate: sign in to continue; guest review cannot proceed."
+                )
             followup_composer = find_chat_composer(page, timeout_ms=timeout_ms)
             if followup_composer is None:
                 metadata["new_chat_fallback_attempted"] = True
