@@ -1,0 +1,148 @@
+name: Queue direct-URL website assessment
+run-name: Direct URL assessment ${{ inputs.business_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      business_name:
+        description: Business name for the candidate record
+        required: true
+        type: string
+      website_url:
+        description: Public website URL to capture and assess
+        required: true
+        type: string
+      category:
+        description: Business category (optional)
+        required: false
+        default: ""
+        type: string
+      city:
+        description: City or service area (optional)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: website-lead-hunt-private-operations-${{ github.repository }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.58.0-noble
+      options: --user root
+    outputs:
+      run_key: ${{ steps.capture.outputs.run_key }}
+      candidate_id: ${{ steps.capture.outputs.candidate_id }}
+    steps:
+      - name: Check out public workflow code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Check out private ChatGPT results branch
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: git-chatgpt
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-results
+
+      - name: Install pinned Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Capture the site and run the initial script audit
+        id: capture
+        env:
+          BUSINESS_NAME: ${{ inputs.business_name }}
+          WEBSITE_URL: ${{ inputs.website_url }}
+          CATEGORY: ${{ inputs.category }}
+          CITY: ${{ inputs.city }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          RUN_KEY="direct-$(python -c 'import re,sys; from urllib.parse import urlsplit; host=(urlsplit(sys.argv[1]).hostname or "site").lower().removeprefix("www."); print(re.sub(r"[^a-z0-9]+", "-", host).strip("-")[:40] or "site")' "$WEBSITE_URL")-$RUN_ID"
+          echo "run_key=$RUN_KEY" >> "$GITHUB_OUTPUT"
+          python tools/capture_direct_site.py \
+            --run-key "$RUN_KEY" \
+            --run-id "$RUN_ID" \
+            --business-name "$BUSINESS_NAME" \
+            --website-url "$WEBSITE_URL" \
+            --category "$CATEGORY" \
+            --city "$CITY" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Commit the text candidate record to private ChatGPT results
+        env:
+          RUN_KEY: ${{ steps.capture.outputs.run_key }}
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+        run: python tools/private_results.py commit-run --private-repo private-results --run-key "$RUN_KEY" --message "Queue direct URL assessment: $RUN_KEY"
+
+      - name: Upload source screenshots and candidate artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: lead-hunt-${{ steps.capture.outputs.run_key }}-${{ github.run_id }}
+          path: runs/${{ steps.capture.outputs.run_key }}/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summarize capture
+        env:
+          RUN_KEY: ${{ steps.capture.outputs.run_key }}
+          CANDIDATE_ID: ${{ steps.capture.outputs.candidate_id }}
+          WEBSITE_URL: ${{ inputs.website_url }}
+        run: |
+          {
+            echo '## Direct URL capture'
+            echo "- Candidate: **$CANDIDATE_ID**"
+            echo "- URL: $WEBSITE_URL"
+            echo "- Private run key: `$RUN_KEY`"
+            echo "- Source artifact: `lead-hunt-$RUN_KEY-${{ github.run_id }}`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  dispatch_visual_review:
+    needs: capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Queue the standard three-replicate ChatGPT visual review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_KEY: ${{ needs.capture.outputs.run_key }}
+          CANDIDATE_ID: ${{ needs.capture.outputs.candidate_id }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          payload=$(jq -n \
+            --arg ref "$REF_NAME" \
+            --arg run_key "$RUN_KEY" \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg candidate_id "$CANDIDATE_ID" \
+            '{ref:$ref,inputs:{review_run_key:$run_key,review_source_run_id:$source_run_id,review_candidate_ids:$candidate_id,ScanInitPass:"true",refresh_screenshots:"true",automatic_retry_round:"0",retry_request_id:"",city_campaign_key:""}}')
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$REPOSITORY/actions/workflows/chatgpt-visual-review-batch.yml/dispatches" \
+            --data "$payload"
+          {
+            echo '## Visual review queued'
+            echo "- Candidate: **$CANDIDATE_ID**"
+            echo '- Screenshots will be recaptured fresh, validated, then assessed in three isolated ChatGPT sessions.'
+            echo "- [Open ChatGPT visual-review workflow runs](https://github.com/$REPOSITORY/actions/workflows/chatgpt-visual-review-batch.yml)"
+          } >> "$GITHUB_STEP_SUMMARY"
