@@ -299,6 +299,7 @@ jobs:
         shell: bash
         env:
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+          PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
         run: |
           REVIEW_DIR="artifacts/chatgpt-visual-review/$REVIEW_CANDIDATE_ID"
           ATTEMPT_ROOT="$REVIEW_DIR/attempts"
