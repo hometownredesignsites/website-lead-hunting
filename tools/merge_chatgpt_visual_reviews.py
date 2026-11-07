@@ -184,7 +184,9 @@ def merge(ledger_path: Path, results_dir: Path, candidate_ids: list[str],
                           "last_dispatch_error": None})
         elif status == "retry-needed":
             retry_limit = (min(max_automatic_retry_rounds, 1)
-                           if last_attempt.get("failure_class") == "uncertain_visual_evidence"
+                           if last_attempt.get("failure_class") in {
+                               "uncertain_visual_evidence", "scroll_capture_not_verified"
+                           }
                            else max_automatic_retry_rounds)
             if automatic_retry_round < retry_limit:
                 retry_round = automatic_retry_round + 1

@@ -75,7 +75,9 @@ def validate(manifest_path: Path, recapture_manifest_path: Path | None = None,
             capture = recaptured.get(viewport) or {}
             scroll_check = capture.get("scroll_validation") or {}
             if not scroll_check.get("verified"):
-                actual = int(scroll_check.get("max_observed_scroll_px") or 0)
+                actual = int(scroll_check.get(
+                    "capture_scroll_px", scroll_check.get("max_observed_scroll_px", 0)
+                ) or 0)
                 required = int(scroll_check.get("minimum_required_scroll_px") or minimum_scroll_px)
                 errors.append(
                     f"{viewport}: browser scroll was not verified ({actual}px observed; {required}px required)"

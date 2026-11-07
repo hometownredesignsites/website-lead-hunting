@@ -24,7 +24,7 @@ FIELDS = [
     "website_key", "candidate_id", "candidate_ids", "business_name", "website_url",
     "category", "city", "provider", "assessment_key", "source_run_key",
     "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
-    "replicates_valid", "replicates_required",
+    "replicates_required",
 ]
 for _replicate in REPLICATES:
     FIELDS.extend((f"replicate_{_replicate}_status", f"replicate_{_replicate}_score",
@@ -146,7 +146,6 @@ def apply_event(repo: Path, event: dict) -> dict:
     scores = [int(row[f"replicate_{replicate}_score"]) for replicate in valid_indices]
     confidence = len(scores)
     row["confidence_level"] = str(confidence)
-    row["replicates_valid"] = str(confidence)
     row["latest_replicate_status"] = "passed" if valid_score else status
     if scores:
         exact = mean(scores)

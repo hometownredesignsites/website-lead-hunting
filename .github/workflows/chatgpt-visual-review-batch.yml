@@ -462,9 +462,9 @@ jobs:
           for path in sorted((review_dir / "attempts").glob("*/attempt-status.json"), key=lambda p: int(p.parent.name)):
               attempts.append(json.loads(path.read_text(encoding="utf-8")))
           if preparation_ok and not scroll_validation_ok:
-              status = "failed"
+              status = "retry-needed"
               failure_class = "scroll_capture_not_verified"
-              error = "A distinct mid-page view could not be verified; ChatGPT was not sent duplicate screenshots."
+              error = "A distinct mid-page view could not be verified after bounded scroll recovery; ChatGPT was not sent duplicate screenshots. One delayed fresh-screenshot retry is warranted."
           elif isinstance(review_envelope, dict):
               status = review_envelope.get("status", "retry-needed")
               failure_class = review_envelope.get("failure_class")

@@ -263,7 +263,10 @@ def main() -> int:
             capture = next((item for item in recapture_manifest.get("screenshots", [])
                             if item.get("viewport") == viewport), {})
             scroll_check = capture.get("scroll_validation") or {}
-            actual_scroll = int(scroll_check.get("max_observed_scroll_px") or 0)
+            actual_scroll = int(scroll_check.get(
+                "capture_scroll_px", scroll_check.get("max_observed_scroll_px", 0)
+            ) or 0)
+            scrollable_range = int(scroll_check.get("scrollable_range_px") or actual_scroll)
             for view, live_path in (("top", live_top), ("mid", live_mid)):
                 with Image.open(live_path) as image:
                     validate_source_viewport(viewport, image.width, image.height, live_path)
@@ -285,7 +288,7 @@ def main() -> int:
                     "uploaded_dimensions": {"width": VIEWPORT_WIDTHS[viewport],
                                             "height": viewport_crop_heights[viewport]},
                     "source_top_px": 0 if view == "top" else actual_scroll,
-                    "scrollable_height_px": actual_scroll,
+                    "scrollable_height_px": scrollable_range,
                     "crop": "fresh browser viewport screenshot targeted at page content or scrolled with keyboard/wheel",
                     "capture_target": capture.get("mid_capture_target") if view == "mid" else None,
                 })

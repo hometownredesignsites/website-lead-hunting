@@ -141,47 +141,62 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
                              "lazy_load_discovery_steps": discovery_steps}
             await page.keyboard.press("PageDown")
             await page.wait_for_timeout(400)
-        before_state = await page.evaluate("""() => {
-            const root = document.scrollingElement || document.documentElement;
-            return { windowY: window.scrollY, rootY: root.scrollTop,
-                rootMax: Math.max(0, root.scrollHeight - root.clientHeight) };
-        }""")
+        async def measure_scroll_state() -> dict:
+            return await page.evaluate("""() => {
+                const root = document.scrollingElement || document.documentElement;
+                const nested = Array.from(document.querySelectorAll('*'))
+                    .filter(el => el.scrollHeight > el.clientHeight + 40 &&
+                        ['auto', 'scroll'].includes(getComputedStyle(el).overflowY))
+                    .map(el => ({top: el.scrollTop, max: el.scrollHeight - el.clientHeight,
+                        tag: el.tagName.toLowerCase(), id: el.id || '',
+                        className: typeof el.className === 'string' ? el.className.slice(0, 120) : ''}))
+                    .filter(item => item.max > 0);
+                return {windowY: window.scrollY, rootY: root.scrollTop,
+                    nested, rootMax: Math.max(0, root.scrollHeight - root.clientHeight)};
+            }""")
+
+        def scroll_depth(state: dict) -> int:
+            return max(
+                int(state.get("windowY") or 0),
+                int(state.get("rootY") or 0),
+                max((int(item.get("top") or 0) for item in state.get("nested", [])), default=0),
+            )
+
+        def scroll_range(state: dict) -> int:
+            return max(
+                int(state.get("rootMax") or 0),
+                max((int(item.get("max") or 0) for item in state.get("nested", [])), default=0),
+            )
+
         observed_positions = []
         if target_image:
-            observed_positions.append({"method": "content-image-target", **before_state})
+            observed_positions.append({"method": "content-image-target", **await measure_scroll_state()})
         else:
             await page.evaluate("""() => {
                 const body = document.body;
                 if (body) { body.setAttribute('tabindex', '-1'); body.focus({preventScroll: true}); }
             }""")
-        for method in (() if target_image else ("PageDown", "wheel")):
-            for _ in range(PAGE_DOWN_ATTEMPTS):
+
+        # A below-the-fold image can exist inside a nested scroll region, where
+        # window.scrollTo() reports no movement. Verify the current position and
+        # try bounded user-like input even when a content-image target was found.
+        if not observed_positions or scroll_depth(observed_positions[-1]) < MIN_VERIFIED_SCROLL_PX:
+            for method in ("PageDown", "wheel", "wheel"):
                 if method == "PageDown":
                     await page.keyboard.press("PageDown")
                 else:
                     await page.mouse.move(viewport["width"] // 2, viewport["height"] // 2)
                     await page.mouse.wheel(0, int(viewport["height"] * 0.8))
-                await page.wait_for_timeout(300)
-                state = await page.evaluate("""() => {
-                    const root = document.scrollingElement || document.documentElement;
-                    const nested = Array.from(document.querySelectorAll('*'))
-                        .filter(el => el.scrollHeight > el.clientHeight + 40 &&
-                            ['auto', 'scroll'].includes(getComputedStyle(el).overflowY))
-                        .map(el => ({top: el.scrollTop, max: el.scrollHeight - el.clientHeight}))
-                        .filter(item => item.top > 0);
-                    return {windowY: window.scrollY, rootY: root.scrollTop,
-                        nested, rootMax: Math.max(0, root.scrollHeight - root.clientHeight)};
-                }""")
+                await page.wait_for_timeout(350)
+                state = await measure_scroll_state()
                 observed_positions.append({"method": method, **state})
-                if (state["windowY"] >= MIN_VERIFIED_SCROLL_PX or
-                        state["rootY"] >= MIN_VERIFIED_SCROLL_PX or
-                        any(item["top"] >= MIN_VERIFIED_SCROLL_PX for item in state["nested"])):
+                if scroll_depth(state) >= MIN_VERIFIED_SCROLL_PX:
                     break
-            if observed_positions and (
-                    observed_positions[-1]["windowY"] >= MIN_VERIFIED_SCROLL_PX or
-                    observed_positions[-1]["rootY"] >= MIN_VERIFIED_SCROLL_PX or
-                    any(item["top"] >= MIN_VERIFIED_SCROLL_PX for item in observed_positions[-1]["nested"])):
-                break
+
+        capture_state = await measure_scroll_state()
+        observed_positions.append({"method": "screenshot-capture", **capture_state})
+        methods_used = [item["method"] for item in observed_positions
+                        if item.get("method") != "screenshot-capture"]
         await page.screenshot(path=str(mid_target), full_page=False, animations="disabled", timeout=45000)
         with Image.open(top_target) as image:
             width, height = image.size
@@ -190,12 +205,8 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
             if image.size != (viewport["width"], viewport["height"]):
                 raise RuntimeError(f"Unexpected {viewport_name} mid screenshot dimensions: {image.size}")
             image.verify()
-        final_state = observed_positions[-1] if observed_positions else before_state
-        window_movement = max((int(item.get("windowY", 0)) for item in observed_positions), default=0)
-        root_movement = max((int(item.get("rootY", 0)) for item in observed_positions), default=0)
-        nested_movement = max((int(item.get("top", 0)) for state in observed_positions
-                               for item in state.get("nested", [])), default=0)
-        max_observed = max(window_movement, root_movement, nested_movement)
+        max_observed = max((scroll_depth(state) for state in observed_positions), default=0)
+        capture_scroll_px = scroll_depth(capture_state)
         return {
             "status": "captured",
             "viewport": viewport_name,
@@ -208,11 +219,13 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
             "mid_path": mid_target.name,
             "mid_capture_target": capture_target,
             "scroll_validation": {
-                "method": "content-image-target" if target_image else "PageDown+wheel",
-                "max_window_scroll_px": int(final_state.get("rootMax", 0)),
+                "method": "+".join(methods_used),
+                "max_window_scroll_px": int(capture_state.get("windowY", 0)),
                 "max_observed_scroll_px": max_observed,
+                "capture_scroll_px": capture_scroll_px,
+                "scrollable_range_px": scroll_range(capture_state),
                 "minimum_required_scroll_px": MIN_VERIFIED_SCROLL_PX,
-                "verified": max_observed >= MIN_VERIFIED_SCROLL_PX,
+                "verified": capture_scroll_px >= MIN_VERIFIED_SCROLL_PX,
                 "positions": observed_positions,
             },
         }
