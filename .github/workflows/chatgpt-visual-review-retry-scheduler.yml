@@ -33,8 +33,17 @@ jobs:
           persist-credentials: false
           path: private-results
 
+      - name: Check out shared private configuration
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-config
+
       - name: Load retry queues from private repository
-        run: python tools/private_results.py copy-in --private-repo private-results
+        run: python tools/private_results.py copy-in --private-repo private-results --config-repo private-config
 
       - name: Prepare due retries with available source artifacts
         env:

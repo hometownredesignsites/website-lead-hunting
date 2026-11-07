@@ -4,7 +4,7 @@ This repository runs local-business discovery and direct website assessment in G
 
 ## Public code and private operations data
 
-GitHub Actions runs in this public repository. The private `hometownredesignsites/website-lead-hunting-operations` repository has Actions disabled and stores the category/city CSVs, run ledgers, campaign checkpoints, retry queues, summaries, and durable visual scorecards. The public workflows use the `PRIVATE_RESULTS_TOKEN` Actions secret to check out and commit those records. The token is scoped to the private repository with Contents read/write access. A shared concurrency group serializes private-data writes across branches and workflows.
+GitHub Actions runs in this public repository. The private `hometownredesignsites/website-lead-hunting-operations` repository has Actions disabled and stores the category/city CSVs, run ledgers, campaign checkpoints, retry queues, summaries, and durable visual scorecards. ChatGPT campaign and review data is written to the private `git-chatgpt` branch; Duck.ai data is written to the private `git-duckai` branch. The private `main` branch is reserved for shared configuration and documentation. Public workflows use the `PRIVATE_RESULTS_TOKEN` Actions secret to check out and commit private data. The token is scoped to the private repository with Contents read/write access. A shared concurrency group serializes private-data writes across branches and workflows.
 
 Actions logs and artifacts remain associated with the public repository. They may include business names, URLs, response text, screenshots, and diagnostics; storing durable ledgers in the private repo does not make those logs or artifacts private. Artifacts expire after seven days. GitHub Actions does not upload an artifact into a different repository. Run **Actions → Private results connection check** after configuring `PRIVATE_RESULTS_TOKEN`; it checks private read/write access and removes its temporary marker.
 
@@ -57,6 +57,8 @@ flowchart TD
     U --> E
     U --> V[Campaign complete after final type]
 ```
+
+Duck.ai now scores each candidate three times in independent fresh Xvfb/browser sessions, reusing the same validated three-image submission each time. After each replicate, Python updates `scores/SCORING_MASTER.csv` on private `git-duckai`. The row records each replicate score and factor-point breakdown, confidence level (1, 2, or 3), and the running arithmetic mean. Confidence 1 and 2 are provisional; confidence 3 is complete. `scores/HIGH_MEDIUM_CANDIDATES.csv` is regenerated from the master and includes only High and Medium outcomes, including provisional results. Pass, uncertain, and in-progress rows stay in the master. Existing retry limits apply independently to each replicate; a failed replicate does not discard successful replicate scores or stop other candidate jobs.
 
 The city controller, lead-hunt jobs, visual-review merges, and retry scheduler share one repository-wide Actions concurrency lock, protecting writes to the private `git-duckai` branch. A controller run commits its checkpoint and dispatches the next child while holding the lock; the six-hour Xvfb lead-hunt job runs as a separate workflow. Completion callbacks use `GITHUB_TOKEN` and `workflow_dispatch`, which GitHub permits to start another workflow. `PRIVATE_RESULTS_TOKEN` checks out and commits the private operations repository. Screenshots cannot be stored as private-repository Actions artifacts: artifacts belong to the public repository running the job.
 

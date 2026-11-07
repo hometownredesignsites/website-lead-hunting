@@ -73,8 +73,17 @@ jobs:
           persist-credentials: false
           path: private-results
 
+      - name: Check out shared private configuration
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-config
+
       - name: Load candidate ledgers from private repository
-        run: python tools/private_results.py copy-in --private-repo private-results
+        run: python tools/private_results.py copy-in --private-repo private-results --config-repo private-config
 
       - name: Validate batch and run key
         id: validate
@@ -169,7 +178,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.selected_count != '0'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -180,6 +189,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Check out Duck.ai scoring ledger branch
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: git-duckai
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-scoring
 
       - name: Install pinned Python dependencies
         run: |
@@ -216,61 +234,70 @@ jobs:
             --candidate-id "$REVIEW_CANDIDATE_ID" \
             --output-dir "artifacts/duckai-visual-review/$REVIEW_CANDIDATE_ID/website-review"
 
-      - name: Assess screenshots with the proven in-session retry behavior
+      - name: Assess the same screenshots in three fresh Duck.ai sessions
         id: review
         if: steps.prepare.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
           REVIEW_CANDIDATE_ID: ${{ matrix.candidate_id }}
+          SOURCE_RUN_KEY: ${{ needs.plan.outputs.run_key }}
+          SOURCE_RUN_ID: ${{ needs.plan.outputs.source_run_id }}
         run: |
           REVIEW_DIR="artifacts/duckai-visual-review/$REVIEW_CANDIDATE_ID"
           ATTEMPT_ROOT="$REVIEW_DIR/attempts"
           mkdir -p "$ATTEMPT_ROOT"
-          ATTEMPT_DIR="$ATTEMPT_ROOT/1"
-          mkdir -p "$ATTEMPT_DIR"
-          review_rc=0
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python tools/duckai_file_playwright_anonymous_ci.py \
-              --stage-name duckai_visual_review \
-              --input-file "$REVIEW_DIR/website-review/prompt.txt" \
-              --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
-              --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
-              --output-file "$ATTEMPT_DIR/response.md" \
-              --metadata-output-file "$ATTEMPT_DIR/metadata.json" \
-              --success-screenshot "$ATTEMPT_DIR/duckai-response.png" \
-              --error-screenshot "$ATTEMPT_DIR/duckai-error.png" \
-              --network-log \
-              --network-log-file "$ATTEMPT_DIR/duckai-network.log" \
-              --user-data-dir "tmp/duckai-visual-review-profile-$REVIEW_CANDIDATE_ID" \
-              --allow-retry \
-              --refresh-before-retry \
-              --wait-seconds 70 \
-              --timeout-ms 120000 \
-              --post-response-wait-seconds 2 \
-              --response-settle-seconds 2 \
-              --max-settle-wait-seconds 30 \
-              --expect-factor-scorecard \
-              --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
-              --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
-              --image-file "$REVIEW_DIR/website-review/mobile_review_sheet.jpg" \
-              > "$ATTEMPT_DIR/runner.log" 2>&1 || review_rc=$?
+          MAX_REPLICATE_RETRIES=2
+          for replicate in 1 2 3; do
+            ATTEMPT_DIR="$ATTEMPT_ROOT/$replicate"
+            mkdir -p "$ATTEMPT_DIR/sessions"
+            terminal_status=""
+            for session_attempt in 1 2 3; do
+              SESSION_DIR="$ATTEMPT_DIR/sessions/$session_attempt"
+              mkdir -p "$SESSION_DIR"
+              review_rc=0
+              xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+                python tools/duckai_file_playwright_anonymous_ci.py \
+                  --stage-name duckai_visual_review_replicate_${replicate}_attempt_${session_attempt} \
+                  --input-file "$REVIEW_DIR/website-review/prompt.txt" \
+                  --instructions-file "$REVIEW_DIR/website-review/instructions.txt" \
+                  --context-file "$REVIEW_DIR/website-review/candidate-context.json" \
+                  --output-file "$SESSION_DIR/response.md" \
+                  --metadata-output-file "$SESSION_DIR/metadata.json" \
+                  --success-screenshot "$SESSION_DIR/duckai-response.png" \
+                  --error-screenshot "$SESSION_DIR/duckai-error.png" \
+                  --network-log \
+                  --network-log-file "$SESSION_DIR/duckai-network.log" \
+                  --user-data-dir "tmp/duckai-visual-review-profile-$REVIEW_CANDIDATE_ID-${replicate}-${session_attempt}" \
+                  --allow-retry \
+                  --refresh-before-retry \
+                  --wait-seconds 70 \
+                  --timeout-ms 120000 \
+                  --post-response-wait-seconds 2 \
+                  --response-settle-seconds 2 \
+                  --max-settle-wait-seconds 30 \
+                  --expect-factor-scorecard \
+                  --image-file "$REVIEW_DIR/website-review/desktop_top.jpg" \
+                  --image-file "$REVIEW_DIR/website-review/desktop_mid.jpg" \
+                  --image-file "$REVIEW_DIR/website-review/mobile_review_sheet.jpg" \
+                  > "$SESSION_DIR/runner.log" 2>&1 || review_rc=$?
 
-          if [[ "$review_rc" -eq 0 ]]; then
-            python tools/validate_duckai_visual_review.py \
-              --response "$ATTEMPT_DIR/response.md" \
-              --metadata "$ATTEMPT_DIR/metadata.json" \
-              --context "$REVIEW_DIR/website-review/candidate-context.json" \
-              --output "$ATTEMPT_DIR/review-result.json" \
-              > "$ATTEMPT_DIR/validation.log" 2>&1 || review_rc=$?
-          fi
+              if [[ "$review_rc" -eq 0 ]]; then
+                python tools/validate_duckai_visual_review.py \
+                  --response "$SESSION_DIR/response.md" \
+                  --metadata "$SESSION_DIR/metadata.json" \
+                  --context "$REVIEW_DIR/website-review/candidate-context.json" \
+                  --output "$SESSION_DIR/review-result.json" \
+                  > "$SESSION_DIR/validation.log" 2>&1 || review_rc=$?
+              fi
 
-          python - "$ATTEMPT_DIR" "$review_rc" <<'PY'
+              python - "$SESSION_DIR" "$review_rc" "$session_attempt" <<'PY'
           import json, sys
           from pathlib import Path
           from tools.visual_review_status import classify_attempt
           attempt_dir = Path(sys.argv[1])
           exit_code = int(sys.argv[2])
+          attempt_number = int(sys.argv[3])
           result_path = attempt_dir / "review-result.json"
           result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
           runner_log_path = attempt_dir / "runner.log"
@@ -282,35 +309,68 @@ jobs:
               result=result,
               runner_log_text=runner_log,
           )
-          decision["attempt"] = int(attempt_dir.name)
+          decision["attempt"] = attempt_number
           (attempt_dir / "attempt-status.json").write_text(json.dumps(decision, indent=2) + "\n", encoding="utf-8")
           print(decision["status"])
           PY
-          final_status=$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' "$ATTEMPT_DIR/attempt-status.json")
-          if [[ -f "$ATTEMPT_DIR/review-result.json" ]]; then
-            cp "$ATTEMPT_DIR/review-result.json" "$REVIEW_DIR/website-review/review-result.json"
-          fi
-          if [[ -f "$ATTEMPT_DIR/response.md" ]]; then
-            cp "$ATTEMPT_DIR/response.md" "$REVIEW_DIR/response.md"
-          fi
-          if [[ -f "$ATTEMPT_DIR/metadata.json" ]]; then
-            cp "$ATTEMPT_DIR/metadata.json" "$REVIEW_DIR/metadata.json"
-          fi
+              terminal_status=$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "retry-needed"))' "$SESSION_DIR/attempt-status.json")
+              for file in response.md metadata.json duckai-response.png duckai-error.png duckai-network.log runner.log validation.log review-result.json; do
+                [[ -f "$SESSION_DIR/$file" ]] && cp "$SESSION_DIR/$file" "$ATTEMPT_DIR/$file"
+              done
+              cp "$SESSION_DIR/attempt-status.json" "$ATTEMPT_DIR/attempt-status.json"
+              if [[ "$terminal_status" == "passed" ]]; then
+                break
+              fi
+              retryable=$(python -c 'import json,sys; print("true" if json.load(open(sys.argv[1], encoding="utf-8")).get("retryable") else "false")' "$SESSION_DIR/attempt-status.json")
+              if [[ "$retryable" != "true" || "$session_attempt" -gt "$MAX_REPLICATE_RETRIES" ]]; then
+                break
+              fi
+              echo "Replicate $replicate failed recoverably; starting fresh session retry $((session_attempt + 1))/$((MAX_REPLICATE_RETRIES + 1))."
+            done
+            if ! python tools/update_visual_scoring_ledger.py \
+              --private-repo private-scoring \
+              --branch git-duckai \
+              --provider Duck.ai \
+              --candidate-context "$REVIEW_DIR/website-review/candidate-context.json" \
+              --result "$ATTEMPT_DIR/review-result.json" \
+              --attempt-status "$ATTEMPT_DIR/attempt-status.json" \
+              --replicate "$replicate" \
+              --source-run-key "$SOURCE_RUN_KEY" \
+              --source-run-id "$SOURCE_RUN_ID" \
+              --review-run-id "$GITHUB_RUN_ID" \
+              --actions-run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"; then
+              echo "Scoring ledger update failed for replicate $replicate; the assessment will continue and diagnostics remain in the candidate artifact." >&2
+            fi
+          done
 
-          python - "$REVIEW_DIR" "$final_status" <<'PY'
+          aggregate_rc=0
+          python tools/aggregate_visual_review_replicates.py \
+            --attempt-root "$ATTEMPT_ROOT" \
+            --output "$REVIEW_DIR/website-review/review-result.json" \
+            > "$REVIEW_DIR/replicate-aggregation.json" || aggregate_rc=$?
+
+          python - "$REVIEW_DIR" "$aggregate_rc" <<'PY'
           import json, sys
           from datetime import datetime, timezone
           from pathlib import Path
           review_dir = Path(sys.argv[1])
+          aggregate_rc = int(sys.argv[2])
+          aggregate = json.loads((review_dir / "website-review/review-result.json").read_text(encoding="utf-8"))
           attempts = []
           for path in sorted((review_dir / "attempts").glob("*/attempt-status.json"), key=lambda p: int(p.parent.name)):
               attempts.append(json.loads(path.read_text(encoding="utf-8")))
+          incomplete = [item for item in attempts if item.get("status") != "passed"]
+          retryable = any(item.get("retryable") for item in incomplete)
+          status = "passed" if aggregate_rc == 0 else "retry-needed" if retryable else "failed"
           envelope = {
               "candidate_id": review_dir.name,
-              "status": sys.argv[2],
+              "status": status,
               "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-              "failure_class": attempts[-1].get("failure_class") if attempts and sys.argv[2] != "passed" else None,
-              "error": attempts[-1].get("error") if attempts and sys.argv[2] != "passed" else None,
+              "failure_class": next((item.get("failure_class") for item in incomplete if item.get("failure_class")), None),
+              "error": aggregate.get("errors") if status != "passed" else None,
+              "replicate_count_required": 3,
+              "aggregate_score": (aggregate.get("review") or {}).get("visual_opportunity_score"),
+              "aggregate_verdict": aggregate.get("site_outcome"),
               "attempts": attempts,
           }
           (review_dir / "review-envelope.json").write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
@@ -410,8 +470,17 @@ jobs:
           persist-credentials: false
           path: private-results
 
+      - name: Check out shared private configuration
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-config
+
       - name: Load candidate ledgers from private repository
-        run: python tools/private_results.py copy-in --private-repo private-results
+        run: python tools/private_results.py copy-in --private-repo private-results --config-repo private-config
 
       - name: Download per-candidate review artifacts
         uses: actions/download-artifact@v7

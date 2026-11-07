@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: hometownredesignsites/website-lead-hunting-operations
-          ref: main
+          ref: git-chatgpt
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results-chatgpt
@@ -47,6 +47,15 @@ jobs:
           persist-credentials: false
           path: private-results-duckai
 
+      - name: Check out shared private calibration configuration
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-config
+
       - name: Validate run key and capture same screenshots for both providers
         env:
           CALIBRATION_RUN_KEY: ${{ inputs.calibration_run_key }}
@@ -59,7 +68,7 @@ jobs:
           fi
           python -m pip install --disable-pip-version-check -r requirements.txt
           python tools/capture_human_high_calibration.py \
-            --targets-csv private-results-chatgpt/config/calibration_human_high_targets.csv \
+            --targets-csv private-config/config/calibration_human_high_targets.csv \
             --run-dir "runs/$CALIBRATION_RUN_KEY"
           python tools/private_results.py commit-run --private-repo private-results-chatgpt \
             --run-key "$CALIBRATION_RUN_KEY" --message "Save human-high calibration capture: $CALIBRATION_RUN_KEY"
