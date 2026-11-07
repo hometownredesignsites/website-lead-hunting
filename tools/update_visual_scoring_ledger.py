@@ -265,8 +265,12 @@ def main() -> int:
         }
         row = commit_update(args.private_repo.resolve(), args.branch, event)
         summary = Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None
-        line = (f"- {args.provider} replicate {args.replicate}/3: **{row['score'] or 'Uncertain'}** "
-                f"({row['outcome']}; confidence {row['confidence_level']}/3; "
+        replicate_score = row.get(f"replicate_{args.replicate}_score") or "Uncertain"
+        running_average = row.get("average_score_exact") or "Uncertain"
+        rounded_average = row.get("score") or "Uncertain"
+        line = (f"- {args.provider} replicate {args.replicate}/3 raw score: **{replicate_score}**; "
+                f"running average: **{running_average}** (rounded **{rounded_average}**; "
+                f"{row['outcome']}; confidence {row['confidence_level']}/3; "
                 f"{row['assessment_state']}) — {row['business_name']} ({row['website_key']})\n")
         print(line.strip())
         if summary:
