@@ -73,13 +73,22 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: hometownredesignsites/website-lead-hunting-operations
-          ref: main
+          ref: git-chatgpt
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results
 
+      - name: Check out shared private configuration
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-config
+
       - name: Load candidate ledgers from private repository
-        run: python tools/private_results.py copy-in --private-repo private-results
+        run: python tools/private_results.py copy-in --private-repo private-results --config-repo private-config
 
       - name: Validate batch and run key
         id: validate
@@ -191,6 +200,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Check out ChatGPT scoring ledger branch
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: git-chatgpt
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-scoring
 
       - name: Install pinned Python dependencies
         run: |
@@ -366,6 +384,20 @@ jobs:
               fi
               echo "Replicate $replicate failed recoverably; starting fresh session retry $((session_attempt + 1))/$((MAX_REPLICATE_RETRIES + 1))."
             done
+            if ! python tools/update_visual_scoring_ledger.py \
+              --private-repo private-scoring \
+              --branch git-chatgpt \
+              --provider ChatGPT \
+              --candidate-context "$REVIEW_DIR/website-review/candidate-context.json" \
+              --result "$ATTEMPT_DIR/review-result.json" \
+              --attempt-status "$ATTEMPT_DIR/attempt-status.json" \
+              --replicate "$replicate" \
+              --source-run-key "${{ needs.plan.outputs.run_key }}" \
+              --source-run-id "${{ needs.plan.outputs.source_run_id }}" \
+              --review-run-id "$GITHUB_RUN_ID" \
+              --actions-run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"; then
+              echo "Scoring ledger update failed for replicate $replicate; the assessment will continue and diagnostics remain in the candidate artifact." >&2
+            fi
           done
 
           aggregate_rc=0
@@ -497,13 +529,22 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: hometownredesignsites/website-lead-hunting-operations
-          ref: main
+          ref: git-chatgpt
           token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
           persist-credentials: false
           path: private-results
 
+      - name: Check out shared private configuration
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: main
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+          persist-credentials: false
+          path: private-config
+
       - name: Load candidate ledgers from private repository
-        run: python tools/private_results.py copy-in --private-repo private-results
+        run: python tools/private_results.py copy-in --private-repo private-results --config-repo private-config
 
       - name: Download per-candidate review artifacts
         uses: actions/download-artifact@v7

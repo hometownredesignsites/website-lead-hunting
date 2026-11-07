@@ -34,14 +34,17 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
                           text=True, capture_output=True)
 
 
-def copy_in(repo: Path, workspace: Path) -> None:
+def copy_in(repo: Path, workspace: Path, config_repo: Path | None = None) -> None:
     if not (repo / ".git").exists():
         raise ValueError(f"Private checkout is not a git repository: {repo}")
+    config_source = config_repo or repo
+    if not (config_source / ".git").exists():
+        raise ValueError(f"Private config checkout is not a git repository: {config_source}")
     for name in ("config", "runs"):
         target = workspace / name
         if target.exists():
             shutil.rmtree(target)
-    copy_tree(repo / "config", workspace / "config")
+    copy_tree(config_source / "config", workspace / "config")
     copy_tree(repo / "runs", workspace / "runs")
 
 
@@ -116,6 +119,8 @@ def main() -> int:
     for name in ("copy-in",):
         command = sub.add_parser(name)
         command.add_argument("--private-repo", type=Path, required=True)
+        command.add_argument("--config-repo", type=Path,
+                             help="Optional private main-branch checkout used for shared config")
         command.add_argument("--workspace", type=Path, default=Path.cwd())
     out = sub.add_parser("commit-run")
     out.add_argument("--private-repo", type=Path, required=True)
@@ -134,8 +139,9 @@ def main() -> int:
         repo = args.private_repo.resolve()
         workspace = args.workspace.resolve() if hasattr(args, "workspace") else Path.cwd()
         if args.command == "copy-in":
-            copy_in(repo, workspace)
-            print("Loaded config and durable run records from private results repository.")
+            config_repo = args.config_repo.resolve() if args.config_repo else None
+            copy_in(repo, workspace, config_repo)
+            print("Loaded shared configuration and provider-branch run records from private repositories.")
         elif args.command == "commit-run":
             copy_run_out(repo, workspace, args.run_key)
             commit(repo, [f"runs/{args.run_key}"], args.message)

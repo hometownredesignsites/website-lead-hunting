@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Update the provider's live score CSV after one visual replicate."""
+from __future__ import annotations
+
+import argparse
+import base64
+import csv
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from statistics import mean
+from urllib.parse import urlparse
+
+
+FACTORS = (
+    "hero_imagery", "image_quality", "design_freshness", "readability",
+    "layout_mobile", "broken_images", "interactions",
+)
+REPLICATES = (1, 2, 3)
+FIELDS = [
+    "website_key", "candidate_id", "candidate_ids", "business_name", "website_url",
+    "category", "city", "provider", "assessment_key", "source_run_key",
+    "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
+    "replicates_valid", "replicates_required",
+]
+for _replicate in REPLICATES:
+    FIELDS.extend((f"replicate_{_replicate}_status", f"replicate_{_replicate}_score",
+                   f"replicate_{_replicate}_factor_points_json"))
+FIELDS.extend((
+    "average_score_exact", "score", "average_factor_points_json",
+    "provisional_outcome", "final_outcome", "outcome", "assessment_state",
+    "latest_replicate_status", "updated_at", "actions_run_url",
+))
+
+
+def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", "-C", str(repo), *args], check=check,
+                          text=True, capture_output=True)
+
+
+def canonical_key(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        raise ValueError(f"Candidate has no valid website host: {url!r}")
+    return host
+
+
+def load_rows(path: Path) -> dict[str, dict[str, str]]:
+    if not path.is_file():
+        return {}
+    with path.open("r", encoding="utf-8-sig", newline="") as source:
+        reader = csv.DictReader(source)
+        rows = {}
+        for row in reader:
+            key = (row.get("website_key") or "").strip()
+            if key:
+                rows[key] = {field: row.get(field, "") or "" for field in FIELDS}
+        return rows
+
+
+def verdict(score: int) -> str:
+    return "pass" if score < 50 else "medium" if score < 75 else "high"
+
+
+def rounded_score(exact: float) -> int:
+    return int(exact + 0.5)
+
+
+def serialize_points(points: dict[str, float]) -> str:
+    return json.dumps({key: round(value, 2) for key, value in sorted(points.items())},
+                      separators=(",", ":"), sort_keys=True)
+
+
+def apply_event(repo: Path, event: dict) -> dict:
+    scores_dir = repo / "scores"
+    scores_dir.mkdir(parents=True, exist_ok=True)
+    master_path = scores_dir / "SCORING_MASTER.csv"
+    high_medium_path = scores_dir / "HIGH_MEDIUM_CANDIDATES.csv"
+    rows = load_rows(master_path)
+
+    context = event["context"]
+    candidate_id = str(context["candidate_id"])
+    website_url = str(context["website_url"])
+    key = canonical_key(website_url)
+    provider = event["provider"]
+    assessment_key = f"{event['review_run_id']}:{event['source_run_key']}:{event['source_run_id']}:{key}"
+    row = rows.get(key, {field: "" for field in FIELDS})
+    if row.get("assessment_key") != assessment_key:
+        row = {field: "" for field in FIELDS}
+        row.update({
+            "website_key": key,
+            "candidate_id": candidate_id,
+            "candidate_ids": candidate_id,
+            "provider": provider,
+            "assessment_key": assessment_key,
+            "source_run_key": event["source_run_key"],
+            "source_lead_hunt_run_id": event["source_run_id"],
+            "replicates_required": "3",
+        })
+    else:
+        prior_ids = [value for value in row.get("candidate_ids", "").split("|") if value]
+        row["candidate_ids"] = "|".join(dict.fromkeys([*prior_ids, candidate_id]))
+    row.update({
+        "website_url": website_url,
+        "business_name": str(context.get("business_name") or row.get("business_name") or ""),
+        "category": str(context.get("category") or row.get("category") or ""),
+        "city": str(context.get("city") or row.get("city") or ""),
+        "provider": provider,
+        "source_run_key": event["source_run_key"],
+        "source_lead_hunt_run_id": event["source_run_id"],
+        "review_workflow_run_id": event["review_run_id"],
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "actions_run_url": event["actions_run_url"],
+    })
+
+    index = event["replicate"]
+    status = event["attempt_status"].get("status", "retry-needed")
+    result = event.get("result") or {}
+    review = result.get("review") if isinstance(result, dict) else None
+    raw_score = review.get("visual_opportunity_score") if isinstance(review, dict) else None
+    valid_score = (status == "passed" and isinstance(result, dict)
+                   and result.get("status") == "passed" and isinstance(review, dict)
+                   and isinstance(raw_score, int) and not isinstance(raw_score, bool)
+                   and 0 <= raw_score <= 100
+                   and review.get("site_outcome") in {"pass", "medium", "high"})
+    if valid_score:
+        row[f"replicate_{index}_status"] = "passed"
+        row[f"replicate_{index}_score"] = str(raw_score)
+        calibration = review.get("score_calibration") or {}
+        factor_points = {
+            factor: (calibration.get("factor_points") or {}).get(factor, {}).get("points", 0)
+            for factor in FACTORS
+        }
+        row[f"replicate_{index}_factor_points_json"] = serialize_points(factor_points)
+    elif not row.get(f"replicate_{index}_score"):
+        row[f"replicate_{index}_status"] = status if status in {"retry-needed", "failed"} else "uncertain"
+
+    valid_indices = [replicate for replicate in REPLICATES
+                     if row.get(f"replicate_{replicate}_score", "") != ""]
+    scores = [int(row[f"replicate_{replicate}_score"]) for replicate in valid_indices]
+    confidence = len(scores)
+    row["confidence_level"] = str(confidence)
+    row["replicates_valid"] = str(confidence)
+    row["latest_replicate_status"] = "passed" if valid_score else status
+    if scores:
+        exact = mean(scores)
+        score = rounded_score(exact)
+        row["average_score_exact"] = f"{exact:.2f}"
+        row["score"] = str(score)
+        row["provisional_outcome"] = verdict(score)
+        row["outcome"] = verdict(score)
+        factor_values: dict[str, list[float]] = {factor: [] for factor in FACTORS}
+        for replicate in valid_indices:
+            raw = row.get(f"replicate_{replicate}_factor_points_json") or "{}"
+            try:
+                values = json.loads(raw)
+            except json.JSONDecodeError:
+                values = {}
+            for factor in FACTORS:
+                factor_values[factor].append(float(values.get(factor, 0)))
+        row["average_factor_points_json"] = serialize_points(
+            {factor: mean(points) for factor, points in factor_values.items() if points}
+        )
+    else:
+        row["average_score_exact"] = ""
+        row["score"] = ""
+        row["provisional_outcome"] = "uncertain"
+        row["outcome"] = "uncertain"
+        row["average_factor_points_json"] = "{}"
+    row["final_outcome"] = row.get("provisional_outcome", "") if confidence == 3 else ""
+    if confidence == 3:
+        row["assessment_state"] = "complete"
+    elif not valid_score:
+        row["assessment_state"] = "retry-needed"
+    else:
+        row["assessment_state"] = "in-progress"
+    rows[key] = row
+
+    ordered = sorted(rows.values(), key=lambda item: (
+        -int(item["score"]) if item.get("score", "").isdigit() else 1,
+        (item.get("business_name") or "").casefold(),
+        item.get("website_key", ""),
+    ))
+    for path, selected in ((master_path, ordered),
+                           (high_medium_path, [r for r in ordered if r.get("outcome") in {"high", "medium"}])):
+        with path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=FIELDS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(selected)
+    return row
+
+
+def commit_update(repo: Path, branch: str, event: dict) -> dict:
+    token = os.environ.get("PRIVATE_RESULTS_TOKEN", "")
+    if not token:
+        raise RuntimeError("PRIVATE_RESULTS_TOKEN is not set")
+    git(repo, "config", "user.name", "github-actions[bot]")
+    git(repo, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
+    auth = ["-c", f"http.extraheader=AUTHORIZATION: basic {encoded}"]
+    update = {}
+    for attempt in range(6):
+        if attempt:
+            fetched = subprocess.run(["git", "-C", str(repo), *auth, "fetch", "origin", branch],
+                                     check=False, text=True, capture_output=True)
+            if fetched.returncode:
+                raise RuntimeError(f"Could not refresh private scoring branch: {fetched.stderr.strip()}")
+            git(repo, "reset", "--hard", "FETCH_HEAD")
+        update = apply_event(repo, event)
+        git(repo, "add", "--", "scores/SCORING_MASTER.csv", "scores/HIGH_MEDIUM_CANDIDATES.csv")
+        staged = git(repo, "diff", "--cached", "--quiet", check=False)
+        if staged.returncode == 0:
+            break
+        git(repo, "commit", "-m", f"Update {event['provider']} scoring ledger: {update['website_key']} replicate {event['replicate']}")
+        pushed = subprocess.run(["git", "-C", str(repo), *auth, "push", "origin",
+                                 f"HEAD:refs/heads/{branch}"], check=False, text=True, capture_output=True)
+        if pushed.returncode == 0:
+            break
+        detail = (pushed.stderr or pushed.stdout).strip()
+        if not any(value in detail.lower() for value in ("non-fast-forward", "fetch first", "rejected")):
+            raise RuntimeError(f"Could not push private scoring ledger update: {detail}")
+        if attempt == 5:
+            raise RuntimeError(f"Private scoring branch kept advancing after six retries: {detail}")
+        print(f"Private scoring branch advanced concurrently; replaying this replicate update ({attempt + 1}/5).")
+    return update
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--private-repo", type=Path, required=True)
+    parser.add_argument("--branch", required=True)
+    parser.add_argument("--provider", choices=("ChatGPT", "Duck.ai"), required=True)
+    parser.add_argument("--candidate-context", type=Path, required=True)
+    parser.add_argument("--result", type=Path)
+    parser.add_argument("--attempt-status", type=Path, required=True)
+    parser.add_argument("--replicate", type=int, choices=REPLICATES, required=True)
+    parser.add_argument("--source-run-key", required=True)
+    parser.add_argument("--source-run-id", required=True)
+    parser.add_argument("--review-run-id", required=True)
+    parser.add_argument("--actions-run-url", required=True)
+    args = parser.parse_args()
+    try:
+        context = json.loads(args.candidate_context.read_text(encoding="utf-8"))
+        status = json.loads(args.attempt_status.read_text(encoding="utf-8"))
+        result = json.loads(args.result.read_text(encoding="utf-8")) if args.result and args.result.is_file() else None
+        if not isinstance(context, dict) or not context.get("candidate_id") or not context.get("website_url"):
+            raise ValueError("Candidate context must include candidate_id and website_url")
+        if not isinstance(status, dict):
+            raise ValueError("Attempt status must be a JSON object")
+        event = {
+            "provider": args.provider,
+            "context": context,
+            "attempt_status": status,
+            "result": result,
+            "replicate": args.replicate,
+            "source_run_key": args.source_run_key,
+            "source_run_id": args.source_run_id,
+            "review_run_id": args.review_run_id,
+            "actions_run_url": args.actions_run_url,
+        }
+        row = commit_update(args.private_repo.resolve(), args.branch, event)
+        summary = Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None
+        line = (f"- {args.provider} replicate {args.replicate}/3: **{row['score'] or 'Uncertain'}** "
+                f"({row['outcome']}; confidence {row['confidence_level']}/3; "
+                f"{row['assessment_state']}) — {row['business_name']} ({row['website_key']})\n")
+        print(line.strip())
+        if summary:
+            with summary.open("a", encoding="utf-8") as output:
+                output.write(line)
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError, RuntimeError) as exc:
+        detail = getattr(exc, "stderr", None)
+        print(f"score ledger update failed: {detail or exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
