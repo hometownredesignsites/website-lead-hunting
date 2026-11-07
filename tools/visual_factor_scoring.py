@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v11"
+ASSESSMENT_VERSION = "fixed-factors-v12"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",
@@ -22,6 +22,76 @@ FACTOR_SOURCES = {
     "layout_mobile": "screenshots", "broken_images": "script_audit",
     "interactions": "script_audit",
 }
+
+
+def classify_broken_image_audit(images: dict | None) -> dict:
+    """Separate source-backed visible failures from ambiguous browser noise."""
+    images = images or {}
+    records = images.get("images") or []
+    request_failures = images.get("request_failures") or []
+    explicitly_unattributed = images.get("unattributed_request_failures") or []
+    explicitly_unresolved = images.get("unresolved_images") or []
+    transient_failures = images.get("transient_request_failures") or []
+
+    def usable_url(value) -> str:
+        value = str(value or "").strip()
+        return value if value.startswith(("http://", "https://", "data:image/", "blob:")) else ""
+
+    referenced_urls = set()
+    for item in records:
+        if isinstance(item, dict):
+            for key in ("url", "current_url", "declared_url"):
+                value = usable_url(item.get(key))
+                if value:
+                    referenced_urls.add(value)
+
+    confirmed_records = []
+    unresolved_records = list(explicitly_unresolved)
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        url = next((usable_url(item.get(key)) for key in ("url", "current_url", "declared_url")
+                    if usable_url(item.get(key))), "")
+        if url and item.get("visible", True) is not False:
+            confirmed_records.append(item)
+        elif not url:
+            unresolved_records.append(item)
+
+    matched_failures = [item for item in request_failures
+                        if isinstance(item, dict) and usable_url(item.get("url")) in referenced_urls]
+    unmatched_failures = list(explicitly_unattributed) + [
+        item for item in request_failures
+        if not isinstance(item, dict) or usable_url(item.get("url")) not in referenced_urls
+    ]
+    confirmed_urls = {next((usable_url(item.get(key)) for key in ("url", "current_url", "declared_url")
+                            if usable_url(item.get(key))), "") for item in confirmed_records}
+    confirmed_urls.update(usable_url(item.get("url")) for item in matched_failures
+                          if isinstance(item, dict) and usable_url(item.get("url")))
+
+    # Old ledgers only retained a count. Without item-level provenance, do not
+    # reinterpret a nonzero count as harmless browser noise.
+    legacy_unexplained_count = (
+        not records and not request_failures and int(images.get("failed_image_count", 0) or 0) > 0
+    )
+    confirmed_count = max(len(confirmed_urls), int(images.get("confirmed_failed_image_count", 0) or 0))
+    if legacy_unexplained_count:
+        confirmed_count = max(confirmed_count, int(images.get("failed_image_count", 0) or 0))
+    ambiguous_count = len(unresolved_records) + len(unmatched_failures) + len(transient_failures)
+    raw_count = int(images.get("reported_failed_image_count", images.get("failed_image_count", 0)) or 0)
+    raw_count = max(raw_count, len(records) + len(request_failures) + len(transient_failures))
+    fallback_allowed = confirmed_count == 0
+    status = str(images.get("status", "not_run")).casefold()
+    if fallback_allowed and ambiguous_count and status == "issues_found":
+        status = "screenshot_fallback"
+    return {
+        "status": status,
+        "confirmed_failed_image_count": confirmed_count,
+        "reported_failed_image_count": raw_count,
+        "unresolved_images": unresolved_records,
+        "unattributed_request_failures": unmatched_failures,
+        "transient_request_failures": transient_failures,
+        "screenshot_fallback_allowed": bool(fallback_allowed),
+    }
 
 
 def _source_matches(key: str, source) -> bool:
@@ -151,11 +221,27 @@ def apply_first_view_video_overrides(factors: dict, audit: dict | None) -> bool:
     return True
 
 
-def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
+def _screenshot_explicitly_finds_no_broken_images(item: dict | None) -> bool:
+    item = item or {}
+    source = re.sub(r"[^a-z]+", "_", str(item.get("source") or "").casefold()).strip("_")
+    evidence = str(item.get("evidence") or "")
+    if "screenshot" not in source or "screenshot" not in evidence.casefold():
+        return False
+    no_failure = re.search(
+        r"\b(?:no|none|not visible|not apparent|not observed|cannot see|can't see)\b"
+        r".{0,100}\b(?:broken|failed|missing)\s+(?:image|photo|picture)s?\b"
+        r"|\b(?:broken|failed|missing)\s+(?:image|photo|picture)s?\b.{0,100}\b(?:not visible|not apparent|not observed|none visible)\b",
+        evidence, re.IGNORECASE | re.DOTALL,
+    )
+    return bool(no_failure)
+
+
+def enforce_script_audit_evidence(factors: dict, audit: dict, screenshots_available: bool = False) -> dict:
     """Prevent unavailable automated checks from being rated as clean."""
     apply_first_view_video_overrides(factors, audit)
     image_status = (audit.get("broken_images") or {}).get("status", "not_run")
     images = audit.get("broken_images") or {}
+    image_classification = classify_broken_image_audit(images)
     loading = images.get("lazy_loading") or {}
     pending_non_lazy = any(
         str((item or {}).get("loading", "")).casefold() != "lazy"
@@ -165,13 +251,30 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
         int(loading.get("attempted", 0) or 0) >= 20
     )
     all_lazy_images_inspected = bool(loading.get("complete"))
-    confirmed_failures = int(images.get("failed_image_count", 0) or 0)
+    confirmed_failures = image_classification["confirmed_failed_image_count"]
     image_sample_accepted = (
         (image_status == "clear" and not pending_non_lazy)
         or (all_lazy_images_inspected and not pending_non_lazy)
         or (image_status == "sampled" and sample_sufficient and not pending_non_lazy)
     )
-    if image_sample_accepted and not confirmed_failures:
+    fallback_available = screenshots_available and (
+        bool(images.get("screenshot_fallback_allowed")) or image_classification["screenshot_fallback_allowed"]
+    )
+    factor = factors.get("broken_images") or {}
+    screenshot_fallback_assessment = False
+    if fallback_available and _screenshot_explicitly_finds_no_broken_images(factor):
+        factors["broken_images"] = {
+            "state": "assessed", "severity": "none",
+            "evidence": ("The script audit had only unresolved or uncorrelated image evidence. All four screenshots "
+                         "were uploaded and show no visible broken image; this finding is limited to the captured views."),
+            "source": "screenshots_and_script_audit",
+        }
+        screenshot_fallback_assessment = True
+    elif fallback_available and factor.get("state") == "assessed" and "screenshot" in str(factor.get("source", "")).casefold():
+        # A model assessment grounded in the supplied screenshots is a valid
+        # fallback when the automated image check is inconclusive.
+        screenshot_fallback_assessment = True
+    elif image_sample_accepted and not confirmed_failures:
         factors["broken_images"] = {
             "state": "assessed", "severity": "none",
             "evidence": ("The script inspected every discovered lazy-loaded image and found no confirmed broken images."
@@ -182,7 +285,7 @@ def enforce_script_audit_evidence(factors: dict, audit: dict) -> dict:
                          "no confirmed broken images were found."),
             "source": "script_audit",
         }
-    elif image_status not in {"clear", "issues_found"}:
+    elif image_status not in {"clear", "issues_found"} and not screenshot_fallback_assessment:
         factors["broken_images"] = {
             "state": "uncertain", "severity": None,
             "evidence": f"Automated broken-image audit status is {image_status}; findings are incomplete.",
@@ -262,6 +365,10 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
         # label for diagnostics, but do not reject useful evidence over a
         # harmless label variation (or a wrong label in the parallel JSON).
         reported_source = source
+        canonical_source = FACTOR_SOURCES[key]
+        normalized_source = re.sub(r"[^a-z]+", "_", str(source or "").casefold()).strip("_")
+        if key == "broken_images" and normalized_source == "screenshots_and_script_audit":
+            canonical_source = normalized_source
         if state == "uncertain":
             uncertain.append(key)
         normalized[key] = {
@@ -269,7 +376,7 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
             "state": state,
             "severity": severity if state == "assessed" else None,
             "evidence": evidence.strip(),
-            "source": FACTOR_SOURCES[key],
+            "source": canonical_source,
             "reported_source": reported_source,
         }
     if errors:

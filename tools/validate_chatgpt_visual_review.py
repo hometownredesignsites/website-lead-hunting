@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 
 from playwright_runner.prompt_contracts import extract_json_payload
-from visual_factor_scoring import (ASSESSMENT_VERSION, FACTORS, enforce_script_audit_evidence,
+from visual_factor_scoring import (ASSESSMENT_VERSION, FACTORS, classify_broken_image_audit,
+                                   enforce_script_audit_evidence,
                                    has_prominent_first_view_video, normalize_and_score,
                                    parse_factor_assessments)
 
@@ -116,6 +117,12 @@ def main() -> int:
     uploaded_names = {item.get("filename") for item in attachment_records
                       if item.get("status") == "uploaded"}
     expected_names = {item.get("filename") for item in context.get("screenshots", [])}
+    screenshots_confirmed = (
+        len(expected_names) == 4
+        and expected_names == {"desktop_top.jpg", "desktop_mid.jpg", "mobile_top.jpg", "mobile_mid.jpg"}
+        and uploaded_names == expected_names
+        and len(attachment_records) == 4
+    )
     errors: list[str] = []
     if not review:
         errors.append("response has no parseable JSON object or labeled assessment scorecard")
@@ -135,7 +142,14 @@ def main() -> int:
         factors = parse_factor_assessments(response_text, review)
         audit = context.get("script_audit") or {}
         hero_video_present = has_prominent_first_view_video(audit)
-        enforce_script_audit_evidence(factors, audit)
+        enforce_script_audit_evidence(factors, audit, screenshots_available=screenshots_confirmed)
+        broken_image_factor = factors.get("broken_images") or {}
+        broken_image_fallback_used = (
+            screenshots_confirmed
+            and classify_broken_image_audit(audit.get("broken_images") or {})["screenshot_fallback_allowed"]
+            and broken_image_factor.get("state") == "assessed"
+            and "screenshot" in str(broken_image_factor.get("source", "")).casefold()
+        )
         scorecard = normalize_and_score(factors, audit)
         review["factor_assessments"] = scorecard["factors"]
         errors.extend(scorecard["errors"])
@@ -170,6 +184,7 @@ def main() -> int:
             "dated_design_floor_points": scorecard.get("dated_design_floor_points", 0),
             "stale_copyright_points": scorecard.get("stale_copyright_points", 0),
             "uncertain_factors": scorecard["uncertain_factors"],
+            "broken_image_screenshot_fallback_used": broken_image_fallback_used,
         }
         review["raw_model_response"] = response_text
         verdict, score = scorecard["verdict"], scorecard["score"]

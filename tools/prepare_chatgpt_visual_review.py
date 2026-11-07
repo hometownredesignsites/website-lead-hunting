@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from PIL import Image
+from visual_factor_scoring import classify_broken_image_audit
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -100,25 +101,16 @@ def script_audit_summary(candidate: dict) -> dict:
     http = checks.get("http_links_and_resources") or {}
     images = checks.get("broken_images") or {}
     lazy_loading = images.get("lazy_loading", {}) or {}
-    image_request_failures = images.get("request_failures", []) or []
-    # Chromium may cancel an image request during navigation, lazy-load
-    # turnover, or screenshot capture. Keep these in diagnostics but do not
-    # treat ERR_ABORTED by itself as a confirmed broken customer image.
+    image_classification = classify_broken_image_audit(images)
+    image_request_failures = [
+        item for item in (images.get("request_failures", []) or [])
+        if "ERR_ABORTED" not in str((item or {}).get("failure", "")).upper()
+    ]
     transient_image_failures = list(images.get("transient_request_failures", []) or [])
-    confirmed_request_failures = []
-    for failure in image_request_failures:
-        reason = str((failure or {}).get("failure", "")).upper()
-        if "ERR_ABORTED" in reason:
-            transient_image_failures.append(failure)
-        else:
-            confirmed_request_failures.append(failure)
-    image_request_failures = confirmed_request_failures
-    failed_image_count = int(images.get("failed_image_count", 0) or 0)
-    # Older records included all failed network requests in this count. When
-    # their only evidence is ERR_ABORTED, remove that transient contribution.
-    if transient_image_failures and not images.get("images"):
-        failed_image_count = max(0, failed_image_count - len(transient_image_failures))
-    image_status = images.get("status", "not_run")
+    image_request_failures = [item for item in image_request_failures
+                              if item not in image_classification["unattributed_request_failures"]]
+    failed_image_count = image_classification["confirmed_failed_image_count"]
+    image_status = image_classification["status"]
     pending_images = images.get("pending_images", []) or []
     pending_non_lazy = any(str((item or {}).get("loading", "")).casefold() != "lazy"
                            for item in pending_images)
@@ -127,7 +119,7 @@ def script_audit_summary(candidate: dict) -> dict:
     # a fresh visual attempt without re-running discovery.
     sample_sufficient = bool(lazy_loading.get("sample_sufficient")) or int(lazy_loading.get("attempted", 0) or 0) >= 20
     every_lazy_image_inspected = bool(lazy_loading.get("complete"))
-    if (image_status in {"partial", "sampled", "issues_found"} and
+    if (image_status in {"partial", "sampled", "issues_found", "screenshot_fallback"} and
             (every_lazy_image_inspected or sample_sufficient) and not pending_non_lazy and
             not failed_image_count and not image_request_failures):
         image_status = "sampled"
@@ -155,14 +147,22 @@ def script_audit_summary(candidate: dict) -> dict:
         "broken_images": {
             "status": image_status,
             "failed_image_count": failed_image_count,
+            "reported_failed_image_count": image_classification["reported_failed_image_count"],
+            "unresolved_image_count": len(image_classification["unresolved_images"]),
+            "screenshot_fallback_allowed": image_classification["screenshot_fallback_allowed"],
             "lazy_loading": lazy_loading,
             "scope_note": images.get("scope_note") or (
+                "Automated image evidence was ambiguous; use only visible images in the four supplied screenshots as fallback, and do not infer that uncaptured page images were checked."
+                if image_classification["screenshot_fallback_allowed"] and
+                (image_classification["reported_failed_image_count"] or image_status not in {"clear", "sampled"}) else
                 f"All {lazy_loading.get('attempted', 0)} discovered lazy-loaded images were inspected; no confirmed failures were found."
                 if image_status == "sampled" and every_lazy_image_inspected else
                 "At least 20 lazy-loaded images were inspected as a sufficient sample; additional lazy images do not make this factor uncertain."
                 if image_status == "sampled" else ""),
             "images": _limited(images.get("images")),
             "request_failures": _limited(image_request_failures),
+            "unattributed_request_failures": _limited(image_classification["unattributed_request_failures"]),
+            "unresolved_images": _limited(image_classification["unresolved_images"]),
             "transient_request_failures": _limited(transient_image_failures),
         },
         "contact_form_privacy": {
@@ -338,7 +338,7 @@ def main() -> int:
     }
     instructions = """Assess this local-business website as a potential redesign lead. Use only desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, mobile_mid.jpg and the supplied structured script audit; do not browse or infer unseen facts. Top images show page starts. Mid images target substantial project/gallery/service imagery using page-flow evidence, then the first substantial below-fold image, then a scroll fallback. Treat audit data as automated evidence, never as visually verified.
 
-Python alone calculates the durable score and verdict. Return evidence and factor severities only—no score, verdict, or inferred decision. Assess these seven factors only: hero_imagery, image_quality, design_freshness, readability, layout_mobile (all source=screenshots); broken_images and interactions (source=script_audit). Each factor needs state, source, and specific evidence/reason: assessed requires severity none/minor/moderate/severe; not_applicable and uncertain have no severity. Evidence or limitations saying a factor cannot be assessed require uncertain. Missing factor/state/source/evidence invalidates the scorecard.
+Python alone calculates the durable score and verdict. Return evidence and factor severities only—no score, verdict, or inferred decision. Assess these seven factors only: hero_imagery, image_quality, design_freshness, readability, layout_mobile (source=screenshots); broken_images and interactions (source=script_audit, or screenshots_and_script_audit when image-audit fallback is used). Each factor needs state, source, and specific evidence/reason: assessed requires severity none/minor/moderate/severe; not_applicable and uncertain have no severity. Evidence or limitations saying a factor cannot be assessed require uncertain. Missing factor/state/source/evidence invalidates the scorecard.
 
 SCORING (Python applies): none=0, minor=5, moderate=25, severe=50; not_applicable=0; any required uncertain factor means Uncertain/no score; cap=100; Pass=0–49, Medium=50–74, High=75–100. Confirmed absence of prominent first-view image/video/background sets a 45-point hero floor, replacing weaker hero points. Moderate/severe overall dated design sets a 45-point design_freshness floor; isolated outdated details are 5. A substantial first-view video is assumed to play: Python forces hero_imagery and image_quality to assessed/none (0), even if no frame decoded. Never call detected video absent or image_quality uncertain merely because still photos are not visible. These rules override model severities for those factors.
 
@@ -348,7 +348,7 @@ FACTOR RULES
 - Design freshness: cite dated visual patterns (type, effects, controls, spacing, icons, overall style). Minor=one detail, moderate=patterns across prominent sections, severe=pervasive obsolete presentation harming credibility. Usable design need not follow trends; preference alone is not evidence. Copyright year is a separate weak clue, not this factor.
 - Readability: judge visible contrast/legibility, including text over images and in cards. Small/gray text alone is not a defect unless users would struggle to read it.
 - Layout/mobile: judge hierarchy, clutter, organization, clipping/overlap, and visible portfolio presentation. Keep datedness separate and do not count one cause twice. Score detached nav-area controls only if visibly out of place.
-- Broken images: use audit URL, reason, alt text, and screenshot context; count only material customer-facing failures. ORB/cross-origin blocks, ERR_ABORTED, empty URLs, tracking pixels, or third-party social icons alone do not prove a site defect. If status=sampled means at least 20 lazy images were inspected and failed_image_count=0 with no request_failures, assess none based on that sample, even if more images exist or global audit status is partial. Report confirmed material failures. If site failure cannot be distinguished from capture/browser limits, use uncertain.
+- Broken images: count only source-backed, visible customer-image failures or requests matched to an image element. Empty/missing/deferred src, hidden elements, uncorrelated ORB/cross-origin errors, ERR_ABORTED, tracking pixels, or third-party icons alone are not confirmed failures. If screenshot_fallback_allowed=true or the image audit did not run, assess the images visible in the four screenshots; state the screenshot coverage limit. If no broken image is visible, use assessed (none), source=screenshots_and_script_audit. Use uncertain only when the screenshots themselves do not let you assess visible images. Never claim uncaptured images were checked. If status=sampled with at least 20 inspected lazy images and zero confirmed failures, assess none based on the sample.
 - Interactions: not_applicable plus zero available/tested controls means no safe menu/tab/disclosure was found (no severity, 0). If safe controls exist but any are untested, use uncertain. If all were tested, assess observed behavior; never claim untested controls work or fail.
 
 For each visual factor cite the screenshot/view and concrete user impact; hypothetical “may hinder” claims are insufficient. A dated/amateur look, weak hero, sparse portfolio, or poor image treatment can merit redesign despite working controls. Do not score whitespace, repeated styling, icon-only navigation, or preference alone. Do not infer hidden content or defects from a dark/sparse area; note the limitation and do not score unless screenshots show obstruction, unreadable text, or another concrete problem. If prose says a factor could not be assessed, mark it uncertain; do not contradict this with assessed/none. Only named factors and the deterministic absent-hero rule score. The image-enlargement markup check is a weak preliminary signal and cannot prove JavaScript lightbox absence; do not count it as a visual defect.

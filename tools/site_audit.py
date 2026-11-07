@@ -328,7 +328,10 @@ async def load_lazy_images(page) -> dict:
     """Scroll a bounded number of lazy images into view before measuring and capturing."""
     try:
         pending = await page.evaluate("""() => [...document.images]
-          .map((image, index) => ({index, lazy: image.loading === 'lazy'}))
+          .map((image, index) => ({index, lazy: image.loading === 'lazy' ||
+            (!image.currentSrc && !(image.getAttribute('src') || '').trim() &&
+             ['data-src', 'data-original', 'data-lazy-src', 'data-image-url']
+               .some(name => (image.getAttribute(name) || '').trim()))}))
           .filter(item => item.lazy).map(item => item.index)""")
         attempted = pending[:MAX_LAZY_IMAGES]
         for index in attempted:
@@ -343,7 +346,7 @@ async def load_lazy_images(page) -> dict:
         if attempted:
             try:
                 await page.wait_for_function(
-                    "indices => indices.every(index => { const image = document.images[index]; return !image || image.complete; })",
+                    "indices => indices.every(index => { const image = document.images[index]; return !image || (image.complete && (image.naturalWidth > 0 || image.currentSrc || (image.getAttribute('src') || '').trim())); })",
                     arg=attempted, timeout=3500)
             except Exception:
                 pass
@@ -385,10 +388,25 @@ async def collect_dom_facts(page) -> dict:
           declared_url: new URL(raw, document.baseURI).href, current_url: item.currentSrc || '', alt: item.alt,
           loading: item.loading});
       }
-      const images = [...document.images].map((image, index) => ({index, url: image.currentSrc || image.src || '',
-        declared_url: image.getAttribute('src') || '', alt: image.alt || '', loading: image.loading || 'eager',
-        complete: image.complete, natural_width: image.naturalWidth,
-        failed: image.complete && image.naturalWidth === 0}));
+      const images = [...document.images].map((image, index) => {
+        const src = (image.getAttribute('src') || '').trim();
+        const currentSrc = (image.currentSrc || '').trim();
+        const deferredSources = ['data-src', 'data-original', 'data-lazy-src', 'data-image-url']
+          .map(name => (image.getAttribute(name) || '').trim()).filter(Boolean);
+        const srcset = (image.getAttribute('srcset') || '').trim();
+        const hasRequestedSource = !!(currentSrc || src);
+        const rect = image.getBoundingClientRect();
+        const style = getComputedStyle(image);
+        const visible = !!(rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
+          style.visibility !== 'hidden' && Number(style.opacity || 1) > 0);
+        const resolvedSrc = currentSrc || (src ? new URL(src, document.baseURI).href : '');
+        return {index, url: resolvedSrc, declared_url: src, srcset, alt: image.alt || '', loading: image.loading || 'eager',
+          deferred_sources: deferredSources, has_requested_source: hasRequestedSource, visible,
+          rendered_width: Math.round(rect.width), rendered_height: Math.round(rect.height),
+          complete: image.complete, natural_width: image.naturalWidth,
+          failed: hasRequestedSource && image.complete && image.naturalWidth === 0,
+          unresolved_source: !resolvedSrc && deferredSources.length === 0 && !srcset};
+      });
       const text = document.body?.innerText || '';
       const copyright_years = [...text.matchAll(/(?:©|copyright)\\s*(?:(?:19|20)\\d{2}\\s*[-–]\\s*)?((?:19|20)\\d{2})/ig)].map(m => Number(m[1]));
       const dates = [];
@@ -507,7 +525,10 @@ async def collect_dom_facts(page) -> dict:
         title: document.title, viewport_meta: !!document.querySelector('meta[name="viewport"]'),
         document_width: document.documentElement.scrollWidth, viewport_width: document.documentElement.clientWidth,
         image_count: images.length, loaded_image_count: images.filter(i => i.complete && i.natural_width > 0).length,
-        failed_images: images.filter(i => i.failed).slice(0, 60), pending_images: images.filter(i => !i.complete).slice(0, 30),
+        failed_images: images.filter(i => i.failed).slice(0, 60),
+        unresolved_images: images.filter(i => i.unresolved_source ||
+          ((i.deferred_sources.length || i.srcset) && !i.url && !i.complete)).slice(0, 60),
+        pending_images: images.filter(i => !i.complete).slice(0, 30),
         images: images.slice(0, 300), anchors, resources: resources.slice(0, 500), dates: dates.slice(0, 100),
         privacy_links: [...new Set(privacy_links)].slice(0, 30), contact_links: [...new Set(contact_links)].slice(0, 30),
         blog_links: [...new Set(blog_links)].slice(0, 30), project_links: [...new Set(project_links)].slice(0, 30),
@@ -853,13 +874,27 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
     failed_images = [{**item, "checked_after_lazy_load": bool(
                         loading_report.get("complete") or
                         (item.get("loading") == "lazy" and int(item.get("index", -1)) in attempted_indices))}
-                     for item in facts.get("failed_images", [])]
+                     for item in facts.get("failed_images", [])
+                     if item.get("url") and item.get("visible", True)]
+    unresolved_images = facts.get("unresolved_images", [])
     all_image_request_failures = [row for row in failed_events if row.get("resource_type") == "image"]
     transient_image_request_failures = [row for row in all_image_request_failures
                                         if "ERR_ABORTED" in str(row.get("failure", "")).upper()]
-    image_request_failures = [row for row in all_image_request_failures
-                              if row not in transient_image_request_failures]
-    images_status = ("issues_found" if failed_images or image_request_failures else
+    image_urls = {str(item.get("url") or "") for item in facts.get("images", []) if item.get("url")}
+    matched_image_request_failures = [row for row in all_image_request_failures
+                                      if row not in transient_image_request_failures and
+                                      str(row.get("url") or "") in image_urls]
+    unattributed_image_request_failures = [row for row in all_image_request_failures
+                                           if row not in transient_image_request_failures and
+                                           str(row.get("url") or "") not in image_urls]
+    image_request_failures = matched_image_request_failures
+    confirmed_failed_urls = {str(item.get("url") or "") for item in failed_images if item.get("url")}
+    confirmed_failed_urls.update(str(item.get("url") or "") for item in image_request_failures if item.get("url"))
+    confirmed_failed_image_count = len(confirmed_failed_urls)
+    image_has_ambiguous_evidence = bool(unresolved_images or unattributed_image_request_failures)
+    image_screenshot_fallback_allowed = confirmed_failed_image_count == 0
+    images_status = ("issues_found" if confirmed_failed_image_count else
+                     "screenshot_fallback" if image_has_ambiguous_evidence else
                      "sampled" if sample_sufficient and not loading_report.get("complete") else
                      "partial" if facts.get("pending_images") or not loading_report.get("complete", False) else "clear")
     pending_images = facts.get("pending_images", [])
@@ -1108,8 +1143,13 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
             "network_observed_http_resources": network_http_resources[:100],
             "checked_link_limit_reached": len(selected) > MAX_LINK_CHECKS},
         "broken_images": {"status": images_status, "lazy_loading": facts.get("image_loading", {}),
-            "failed_image_count": len(failed_images) + len(image_request_failures),
+            "failed_image_count": confirmed_failed_image_count,
+            "reported_failed_image_count": len(facts.get("failed_images", [])) + len(all_image_request_failures),
+            "unresolved_image_count": len(unresolved_images),
+            "screenshot_fallback_allowed": image_screenshot_fallback_allowed,
             "images": failed_images[:60], "request_failures": image_request_failures[:60],
+            "unresolved_images": unresolved_images[:60],
+            "unattributed_request_failures": unattributed_image_request_failures[:60],
             "transient_request_failures": transient_image_request_failures[:60],
             "pending_images": pending_images[:30],
             "scope_note": (f"Inspected a sample of {MAX_LAZY_IMAGES} lazy-loaded images; additional lazy images do not make the audit incomplete."
@@ -1118,6 +1158,9 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
                            if images_status == "clear" else
                            "The minimum lazy-image sample was not reached or non-lazy images remain unresolved."
                            if images_status == "partial" else
+                           "Source-backed, visible image failures were confirmed by browser or matching network evidence."
+                           if images_status == "issues_found" else
+                           "The script found only image records without a usable source or uncorrelated browser request failures. Assess visible images in the supplied screenshots; do not treat these records alone as customer-facing failures." if images_status == "screenshot_fallback" else
                            "One or more image failures were confirmed by browser or network evidence.")},
         "contact_form_privacy": form_privacy,
         "contact_email_opportunity": email_opportunity,
