@@ -44,8 +44,116 @@ def review_status(row: dict, field: str) -> str:
     return str(value or "pending")
 
 
+def audit_direct_run(run_dir: Path, manifest: dict) -> dict:
+    """Validate the single-candidate record used by a direct-URL assessment."""
+    candidates, candidate_errors = read_jsonl(run_dir / "CANDIDATE_LEDGER.jsonl")
+    errors = list(candidate_errors)
+    warnings: list[str] = []
+    if not candidates:
+        errors.append("direct URL run has no candidate record")
+    expected = int(manifest.get("target_count") or 1)
+    if len(candidates) != expected:
+        errors.append(f"direct URL run expected {expected} candidate record(s), found {len(candidates)}")
+
+    ids: list[str] = []
+    attempt_statuses: Counter[str] = Counter()
+    review_statuses: Counter[str] = Counter()
+    outcomes: Counter[str] = Counter()
+    screenshots_referenced = 0
+    screenshots_present = 0
+    for row in candidates:
+        candidate_id = str(row.get("candidate_id") or "").strip()
+        if not candidate_id:
+            errors.append("direct URL candidate is missing candidate_id")
+        else:
+            ids.append(candidate_id)
+        if not (row.get("canonical_url") or row.get("final_url")):
+            errors.append(f"direct URL candidate {candidate_id or '(unknown)'} is missing its website URL")
+        if not row.get("domain"):
+            errors.append(f"direct URL candidate {candidate_id or '(unknown)'} is missing its domain")
+
+        attempt_status = review_status(row, "chatgpt_visual_review_last_attempt")
+        review_status_value = review_status(row, "chatgpt_visual_review")
+        attempt_statuses[attempt_status] += 1
+        review_statuses[review_status_value] += 1
+        last_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
+        outcome_value = last_attempt.get("site_outcome") if isinstance(last_attempt, dict) else None
+        outcome = str(outcome_value or row.get("chatgpt_visual_review_outcome") or "").lower()
+        if outcome in {"high", "medium", "pass", "uncertain"}:
+            outcomes[outcome] += 1
+        else:
+            outcomes["pending"] += 1
+
+        for image in (row.get("screenshots") or {}).values():
+            value = image.get("path") if isinstance(image, dict) else image
+            if not value:
+                continue
+            screenshots_referenced += 1
+            path = Path(value)
+            if not path.is_absolute():
+                path = run_dir.parent.parent / path if path.parts and path.parts[0] == "runs" else run_dir / path
+            screenshots_present += int(path.is_file())
+    if screenshots_present < screenshots_referenced:
+        warnings.append(
+            f"{screenshots_present}/{screenshots_referenced} candidate screenshot files are present in this copy of the run"
+        )
+
+    terminal_attempts = {"passed", "retry-needed", "failed"}
+    complete = bool(candidates) and all(
+        review_status(row, "chatgpt_visual_review_last_attempt") in terminal_attempts
+        for row in candidates
+    )
+    return {
+        "run_key": run_dir.name,
+        "run_type": "direct_url_assessment",
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "target_count": expected,
+        "candidate_count": len(candidates),
+        "candidate_ids": ids,
+        "candidate_site_statuses": dict(sorted(Counter(str(row.get("site_check_status") or "unknown") for row in candidates).items())),
+        "chatgpt_visual_review_statuses": dict(sorted(review_statuses.items())),
+        "chatgpt_visual_review_attempt_statuses": dict(sorted(attempt_statuses.items())),
+        "site_outcomes": dict(sorted(outcomes.items())),
+        "candidate_screenshots_present": screenshots_present,
+        "candidate_screenshot_paths": screenshots_referenced,
+        "complete": complete,
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def direct_summary_markdown(summary: dict) -> str:
+    lines = [
+        f"# Direct URL assessment: {summary['run_key']}",
+        "",
+        f"- **Validation:** {'valid' if summary['valid'] else 'invalid'}",
+        f"- **Review attempt recorded:** {'yes' if summary['complete'] else 'no'}",
+        f"- **Candidates:** {summary['candidate_count']}/{summary['target_count']}",
+        f"- **Screenshot files in this run copy:** {summary['candidate_screenshots_present']}/{summary['candidate_screenshot_paths']}",
+        "",
+        "## ChatGPT review attempt status",
+        "",
+        "| Status | Count |",
+        "|---|---:|",
+    ]
+    lines.extend(f"| {status} | {count} |" for status, count in summary["chatgpt_visual_review_attempt_statuses"].items())
+    lines.extend(["", "## Site outcome", "", "| Outcome | Count |", "|---|---:|"])
+    lines.extend(f"| {status} | {count} |" for status, count in summary["site_outcomes"].items())
+    for heading, items in (("Errors", summary["errors"]), ("Warnings", summary["warnings"])):
+        if items:
+            lines.extend(["", f"## {heading}", ""])
+            lines.extend(f"- {item}" for item in items)
+    return "\n".join(lines) + "\n"
+
+
 def audit_run(run_dir: Path) -> dict:
     manifest, manifest_errors = read_json(run_dir / "RUN_MANIFEST.json")
+    if manifest.get("run_type") == "direct_url_assessment":
+        summary = audit_direct_run(run_dir, manifest)
+        summary["errors"] = manifest_errors + summary["errors"]
+        summary["valid"] = not summary["errors"]
+        return summary
     progress, progress_errors = read_json(run_dir / "LOCATION_CATEGORY_PROGRESS.json")
     queries, query_errors = read_jsonl(run_dir / "QUERY_LEDGER.jsonl")
     candidates, candidate_errors = read_jsonl(run_dir / "CANDIDATE_LEDGER.jsonl")
@@ -311,7 +419,8 @@ def main() -> int:
     print(rendered)
     if args.write_summary:
         (run_dir / "RUN_SUMMARY.json").write_text(rendered + "\n", encoding="utf-8")
-        (run_dir / "RUN_SUMMARY.md").write_text(summary_markdown(summary), encoding="utf-8")
+        markdown = direct_summary_markdown(summary) if summary.get("run_type") == "direct_url_assessment" else summary_markdown(summary)
+        (run_dir / "RUN_SUMMARY.md").write_text(markdown, encoding="utf-8")
     if not summary["valid"] or (args.require_complete and not summary["complete"]):
         return 1
     return 0
