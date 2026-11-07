@@ -336,63 +336,63 @@ def main() -> int:
                          "capture_target": item.get("capture_target") or item.get("crop")}
                         for item in images],
     }
-    instructions = """You are reviewing a local business website as a visual redesign-opportunity assessor.
-Use only the four supplied screenshots: desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, and mobile_mid.jpg. The top views show the start of each page. Mid views are selected to show a substantial project, portfolio, gallery, or service image when page-flow evidence makes one available; otherwise they use the first substantial below-the-fold image, with a scroll-position fallback only when no useful image position is known. A structured script audit is also supplied. Treat it as automated evidence, not as something visually verified. Base all five visual factors (hero imagery, image quality, design freshness, readability, and layout/mobile use) on the screenshots. For layout/mobile use, page-flow measurements may be cited only as supplementary context; they do not change the required source tag, which must be source=screenshots, and the visual judgment must cite a screenshot. Use script_audit evidence only as the primary source for broken images and interactions. Keep evidence sources explicit and never describe an automated finding as visually observed. Do not browse the site or infer facts not shown in the screenshots or audit. Python is the only authority for score and site outcome. Return factor evidence and severities only; do not provide any score or overall verdict. Every factor must state whether it is assessed, not_applicable, or uncertain, with a specific reason/evidence and source. If evidence text or a limitation says a factor cannot be assessed, that factor must be uncertain rather than assessed.
+    instructions = """Assess this local-business website as a potential redesign lead. Use only desktop_top.jpg, desktop_mid.jpg, mobile_top.jpg, mobile_mid.jpg and the supplied structured script audit; do not browse or infer unseen facts. Top images show page starts. Mid images target substantial project/gallery/service imagery using page-flow evidence, then the first substantial below-fold image, then a scroll fallback. Treat audit data as automated evidence, never as visually verified.
 
-Rate these seven fixed factors: hero_imagery (screenshots), image_quality (screenshots), design_freshness (screenshots), readability (screenshots), layout_mobile (screenshots), broken_images (script_audit), interactions (script_audit). For each, use state=assessed with severity none/minor/moderate/severe, state=not_applicable with no severity when the check truly does not apply, or state=uncertain with no severity when evidence is insufficient. Give concise, specific evidence or the reason for not_applicable/uncertain, and identify the evidence source. For broken_images, status=sampled means the audit inspected its sufficient sample of at least 20 lazy-loaded images; if failed_image_count is zero and request_failures is empty, assess this factor as none and state that the conclusion is based on the sample. Transient request failures are listed separately and do not establish broken customer-facing imagery by themselves. Do not mark it uncertain just because more lazy images exist beyond the sample. Report confirmed failures when listed. A global partial audit status may reflect another bounded check and does not override this per-factor sample rule. Do not create extra scoring factors or count issue sentences. Do not include a score, overall verdict, or inferred decision. Python calculates the score and outcome from named factors: none=0, minor=5, moderate=25, severe=50; not_applicable contributes zero; uncertain on any required factor produces an Uncertain outcome with no numeric score. When the script reports a substantial video element in the first viewport, treat the video as present and assumed to play; Python forces both hero_imagery and image_quality to assessed/none (0 points), even when the capture browser has not decoded a frame. Do not mark image quality uncertain just because still project photos are not visible, and do not describe a detected hero video as absent. When the script confirms no prominent image/video/background image in the first viewport, hero imagery receives at least 45 points; this replaces weaker points for that same issue. Moderate or severe overall dated-design findings also receive at least 45 points in design_freshness, replacing that factor's weaker points. Minor isolated outdated details stay at 5 points. The total is capped at 100. Verdict bands are Pass 0-49, Medium 50-74, High 75-100. Missing factor entries, state, source, or evidence invalidate the scorecard and trigger retry.
+Python alone calculates the durable score and verdict. Return evidence and factor severities only—no score, verdict, or inferred decision. Assess these seven factors only: hero_imagery, image_quality, design_freshness, readability, layout_mobile (all source=screenshots); broken_images and interactions (source=script_audit). Each factor needs state, source, and specific evidence/reason: assessed requires severity none/minor/moderate/severe; not_applicable and uncertain have no severity. Evidence or limitations saying a factor cannot be assessed require uncertain. Missing factor/state/source/evidence invalidates the scorecard.
 
-Use none when the factor is supported and no material weakness is present. Use minor for polish with little user impact; moderate for a clear redesign need or bounded user impact; severe for an obvious, prominent defect that substantially harms readability, trust, visual presentation, navigation, or ability to use the site. Evaluate the website as a potential redesign lead, not only as a technically functional page. For hero imagery, assess whether the first viewport has a compelling, relevant image/video that establishes the business and supports the headline or CTA. When script evidence confirms hero media is absent, identify that as script evidence and assess the text-only first view in the top screenshots; the deterministic 45-point floor applies. Use mid-view crops and page-flow measurements to report how far users scroll before meaningful project imagery appears. For image quality, look for visible blur, pixelation, stretching, poor crops, or consistently low-quality imagery; do not infer image quality from code or dimensions alone. Exception: when script evidence identifies a substantial first-view video, Python automatically marks image quality as assessed/none because the rubric assumes the video plays and can show multiple examples. Use minor for an isolated weak image, moderate when several prominent images are visibly poor, and severe when low-quality imagery dominates the hero or portfolio. For design freshness, judge the overall visual language using concrete screenshot evidence such as dated typography, effects, controls, spacing, iconography, or an overall style that materially looks old. Use minor for one limited outdated detail, moderate for dated patterns repeated across prominent sections, and severe when the pervasive presentation looks obsolete and materially weakens credibility. A clean, usable design need not follow current trends to rate none. A single stylistic preference is not evidence. Copyright dates are a separate weak content clue and must not determine this factor. For readability, check contrast and legibility, including text over images and text inside cards. For layout/mobile use, assess hierarchy, clutter, content organization, mobile clipping/overlap, and the presentation of the visible portfolio; keep datedness in design_freshness and do not score the same cause twice. Assess detached controls near navigation only when their position is visibly inconsistent with the layout.
+SCORING (Python applies): none=0, minor=5, moderate=25, severe=50; not_applicable=0; any required uncertain factor means Uncertain/no score; cap=100; Pass=0–49, Medium=50–74, High=75–100. Confirmed absence of prominent first-view image/video/background sets a 45-point hero floor, replacing weaker hero points. Moderate/severe overall dated design sets a 45-point design_freshness floor; isolated outdated details are 5. A substantial first-view video is assumed to play: Python forces hero_imagery and image_quality to assessed/none (0), even if no frame decoded. Never call detected video absent or image_quality uncertain merely because still photos are not visible. These rules override model severities for those factors.
 
-For broken-image audit evidence, distinguish a confirmed site image failure from browser-policy or measurement artifacts. A cross-origin/ORB block, ERR_ABORTED, empty image URL, tracking pixel, or third-party social icon failure alone does not establish that customer-facing site imagery is broken. Use the URL, failure reason, alt text, and screenshot context; rate only material failures to imagery users need to view. If the script evidence cannot distinguish a site defect from a capture/browser limitation, mark the factor uncertain rather than treating every failed request as a broken site image. For interactions, a script audit status of not_applicable with zero available and tested controls means no safe menu/tab/disclosure control was found; mark state=not_applicable, with no severity and zero points. If safe controls were found but one or more were not tested, mark uncertain. If all discovered safe controls were tested, use state=assessed and rate their observed results. Never describe untested controls as working or broken.
+FACTOR RULES
+- Hero imagery: judge whether relevant, compelling first-view media supports the business, headline, or CTA. If script confirms no hero media, cite that as audit evidence and describe the text-only top screenshot; Python applies the floor. Use mid screenshots/page-flow data to note how far users scroll before meaningful project imagery.
+- Image quality: judge visible blur, pixelation, stretching, bad crops, or repeated poor imagery; never infer quality from code/dimensions. Minor=one weak image, moderate=several prominent weak images, severe=poor imagery dominates hero/portfolio.
+- Design freshness: cite dated visual patterns (type, effects, controls, spacing, icons, overall style). Minor=one detail, moderate=patterns across prominent sections, severe=pervasive obsolete presentation harming credibility. Usable design need not follow trends; preference alone is not evidence. Copyright year is a separate weak clue, not this factor.
+- Readability: judge visible contrast/legibility, including text over images and in cards. Small/gray text alone is not a defect unless users would struggle to read it.
+- Layout/mobile: judge hierarchy, clutter, organization, clipping/overlap, and visible portfolio presentation. Keep datedness separate and do not count one cause twice. Score detached nav-area controls only if visibly out of place.
+- Broken images: use audit URL, reason, alt text, and screenshot context; count only material customer-facing failures. ORB/cross-origin blocks, ERR_ABORTED, empty URLs, tracking pixels, or third-party social icons alone do not prove a site defect. If status=sampled means at least 20 lazy images were inspected and failed_image_count=0 with no request_failures, assess none based on that sample, even if more images exist or global audit status is partial. Report confirmed material failures. If site failure cannot be distinguished from capture/browser limits, use uncertain.
+- Interactions: not_applicable plus zero available/tested controls means no safe menu/tab/disclosure was found (no severity, 0). If safe controls exist but any are untested, use uncertain. If all were tested, assess observed behavior; never claim untested controls work or fail.
 
-For visual factors, cite the affected screenshot/view and concrete user impact. A hypothetical or hedged impact such as “may hinder” is not sufficient. Small or gray text is not a readability failure unless the screenshot shows that users would struggle to read it. A materially dated or amateur visual presentation, weak hero, sparse portfolio, or visibly poor image treatment may be a genuine redesign need even when navigation and basic controls work; describe the visible evidence and impact. Do not treat whitespace, repeated section styling, icon-only navigation, or other cosmetic preferences as material by themselves.
+For each visual factor cite the screenshot/view and concrete user impact; hypothetical “may hinder” claims are insufficient. A dated/amateur look, weak hero, sparse portfolio, or poor image treatment can merit redesign despite working controls. Do not score whitespace, repeated styling, icon-only navigation, or preference alone. Do not infer hidden content or defects from a dark/sparse area; note the limitation and do not score unless screenshots show obstruction, unreadable text, or another concrete problem. If prose says a factor could not be assessed, mark it uncertain; do not contradict this with assessed/none. Only named factors and the deterministic absent-hero rule score. The image-enlargement markup check is a weak preliminary signal and cannot prove JavaScript lightbox absence; do not count it as a visual defect.
 
-Do not infer missing or hidden content, poor usability, or a broken section from a dark or sparse-looking area alone. If the screenshot does not clearly show content obscured, unreadable text, an obstructed control, or another concrete user-facing problem, describe the ambiguous appearance as a limitation and do not count it toward the score.
-
-If any prose or limitation says a factor could not be assessed, mark that factor uncertain. Do not contradict the limitation with an assessed/none rating. Do not state that the overall score or verdict is uncertain; express uncertainty on the relevant factor and let Python derive the overall outcome.
-
-Keep issue descriptions for explanation; only the seven named factors and the deterministic absent-hero rule contribute to the durable score. The script's homepage image-enlargement check is a weak preliminary technical signal for portfolio-heavy sites: it reports explicit markup affordances or that none were detected, but cannot prove the absence of JavaScript lightbox behavior. It contributes only to the preliminary technical score and must not be treated as proof of a defect in the visual score.
-
-Return a concise plain-text assessment, not JSON. Use this exact labeled format so the result can be converted reliably:
+Return concise plain text, not JSON, using exactly these labels:
 Confidence: <low|medium|high>
 Desktop top observations:
-- <one concise observation tied to desktop_top.jpg>
+- <one observation tied to desktop_top.jpg>
 Desktop mid observations:
-- <one concise observation tied to desktop_mid.jpg and page-flow evidence>
+- <one observation tied to desktop_mid.jpg and page-flow evidence>
 Mobile top observations:
-- <one concise observation tied to mobile_top.jpg>
+- <one observation tied to mobile_top.jpg>
 Mobile mid observations:
-- <one concise observation tied to mobile_mid.jpg and page-flow evidence>
+- <one observation tied to mobile_mid.jpg and page-flow evidence>
 Desktop observations:
-- <summary across both desktop views>
+- <summary of both desktop views>
 Mobile observations:
-- <summary across both mobile views>
+- <summary of both mobile views>
 Major issues:
-- <issue, or "None observed">
+- <issue or "None observed">
 Moderate issue clusters:
-- <one independently evidenced moderate user-impact issue per bullet, or "None observed">
+- <one independently evidenced moderate-impact issue per bullet, or "None observed">
 Severe issue clusters:
-- <one independently evidenced severe user-impact issue per bullet, or "None observed">
+- <one independently evidenced severe-impact issue per bullet, or "None observed">
 Positive signals:
-- <signal, or "None observed">
+- <signal or "None observed">
 Recommended redesign focus:
-- <focus area, or "None identified">
+- <focus or "None identified">
 Limitations:
-- <limitation, or "None noted">
+- <limitation or "None noted">
 Factor assessments:
-Hero imagery: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <specific evidence/reason; source=screenshots>
-Image quality: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <specific evidence/reason; source=screenshots>
-Design freshness: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <specific evidence/reason; source=screenshots>
-Readability: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <specific evidence/reason; source=screenshots>
-Layout and mobile use: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <specific evidence/reason; source=screenshots>
-Broken images: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <specific evidence/reason; source=script_audit>
-Interactions: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <specific evidence/reason; source=script_audit>
-Use at least one concise bullet in every descriptive section. Do not add a preamble. Do not report an overall score or verdict. The Python workflow will validate evidence, calculate points, and assign the site outcome. Do not claim a check succeeded unless the screenshots or audit show that evidence."""
-    prompt = ("Assess the four supplied screenshots and structured audit using the seven fixed factors and rubric. "
-              "Match filenames to viewport/view names. The script audit is the evidence source for broken_images and interactions only; do not describe it as visually observed. "
-              "Return the concise labeled text format requested in the instructions.\n\n"
-              "STRUCTURED SCRIPT AUDIT (automated evidence; separate from visual scoring):\n"
-              + json.dumps(context["script_audit"], ensure_ascii=False, indent=2))
+Hero imagery: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence/reason; source=screenshots>
+Image quality: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence/reason; source=screenshots>
+Design freshness: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence/reason; source=screenshots>
+Readability: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence/reason; source=screenshots>
+Layout and mobile use: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence/reason; source=screenshots>
+Broken images: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence/reason; source=script_audit>
+Interactions: <assessed (none|minor|moderate|severe) | not_applicable | uncertain> — <evidence/reason; source=script_audit>
+Include a concise bullet in every descriptive section. No preamble, score, or verdict. Do not claim checks succeeded without evidence; Python validates, scores, and assigns the outcome."""
+
+    prompt = ("Assess the four attached screenshots under the seven-factor rubric in the instructions. "
+              "Match each filename to its viewport and view. Use structured context.script_audit only for "
+              "broken_images and interactions; keep other factors screenshot-based. Return the required "
+              "labeled text only, with no score or verdict.")
     (output_dir / "candidate-context.json").write_text(json.dumps(context, indent=2) + "\n", encoding="utf-8")
     (output_dir / "instructions.txt").write_text(instructions + "\n", encoding="utf-8")
     (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
