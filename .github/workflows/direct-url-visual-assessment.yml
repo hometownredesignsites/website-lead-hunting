@@ -85,7 +85,12 @@ jobs:
         env:
           RUN_KEY: ${{ steps.capture.outputs.run_key }}
           PRIVATE_RESULTS_TOKEN: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
-        run: python tools/private_results.py commit-run --private-repo private-results --run-key "$RUN_KEY" --message "Queue direct URL assessment: $RUN_KEY"
+        shell: bash
+        run: |
+          python tools/private_results.py commit-run \
+            --private-repo private-results \
+            --run-key "$RUN_KEY" \
+            --message "Queue direct URL assessment: $RUN_KEY"
 
       - name: Upload source screenshots and candidate artifact
         uses: actions/upload-artifact@v6
