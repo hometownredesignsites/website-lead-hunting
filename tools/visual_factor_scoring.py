@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-ASSESSMENT_VERSION = "fixed-factors-v12"
+ASSESSMENT_VERSION = "fixed-factors-v13"
 
 FACTORS = {
     "hero_imagery": "Hero imagery",

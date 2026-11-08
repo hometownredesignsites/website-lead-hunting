@@ -14,6 +14,9 @@ from pathlib import Path
 from statistics import mean
 from urllib.parse import urlparse
 
+from visual_replicate_aggregation import (choose_aggregate_values,
+                                          has_specific_scored_factor_evidence)
+
 
 FACTORS = (
     "hero_imagery", "image_quality", "design_freshness", "readability",
@@ -28,9 +31,12 @@ FIELDS = [
 ]
 for _replicate in REPLICATES:
     FIELDS.extend((f"replicate_{_replicate}_status", f"replicate_{_replicate}_score",
-                   f"replicate_{_replicate}_factor_points_json"))
+                   f"replicate_{_replicate}_factor_points_json",
+                   f"replicate_{_replicate}_evidence_supported"))
 FIELDS.extend((
     "average_score_exact", "score", "average_factor_points_json",
+    "applied_factor_points_json", "applied_replicate", "score_range", "score_aggregation",
+    "disagreement_review_required",
     "provisional_outcome", "final_outcome", "outcome", "assessment_state",
     "latest_replicate_status", "updated_at", "actions_run_url",
 ))
@@ -66,10 +72,6 @@ def load_rows(path: Path) -> dict[str, dict[str, str]]:
 
 def verdict(score: int) -> str:
     return "pass" if score < 50 else "medium" if score < 75 else "high"
-
-
-def rounded_score(exact: float) -> int:
-    return int(exact + 0.5)
 
 
 def serialize_points(points: dict[str, float]) -> str:
@@ -128,6 +130,7 @@ def apply_event(repo: Path, event: dict) -> dict:
                    and result.get("status") == "passed" and isinstance(review, dict)
                    and isinstance(raw_score, int) and not isinstance(raw_score, bool)
                    and 0 <= raw_score <= 100
+                   and review.get("scorecard_validation_status") == "valid"
                    and review.get("site_outcome") in {"pass", "medium", "high"})
     if valid_score:
         row[f"replicate_{index}_status"] = "passed"
@@ -138,6 +141,9 @@ def apply_event(repo: Path, event: dict) -> dict:
             for factor in FACTORS
         }
         row[f"replicate_{index}_factor_points_json"] = serialize_points(factor_points)
+        row[f"replicate_{index}_evidence_supported"] = str(
+            has_specific_scored_factor_evidence(review)
+        ).lower()
     elif not row.get(f"replicate_{index}_score"):
         row[f"replicate_{index}_status"] = status if status in {"retry-needed", "failed"} else "uncertain"
 
@@ -149,9 +155,22 @@ def apply_event(repo: Path, event: dict) -> dict:
     row["latest_replicate_status"] = "passed" if valid_score else status
     if scores:
         exact = mean(scores)
-        score = rounded_score(exact)
+        highest_index = max(range(len(scores)), key=scores.__getitem__)
+        highest_replicate = valid_indices[highest_index]
+        highest_evidence_supported = (
+            row.get(f"replicate_{highest_replicate}_evidence_supported") == "true"
+        )
+        aggregation = choose_aggregate_values(scores, highest_evidence_supported)
+        score = aggregation["score"]
         row["average_score_exact"] = f"{exact:.2f}"
         row["score"] = str(score)
+        row["score_range"] = str(aggregation["range"])
+        row["score_aggregation"] = aggregation["method"]
+        row["disagreement_review_required"] = str(bool(aggregation.get("disagreement_review_required"))).lower()
+        row["applied_replicate"] = (
+            str(valid_indices[aggregation["selected_replicate"] - 1])
+            if aggregation.get("override_applied") else ""
+        )
         row["provisional_outcome"] = verdict(score)
         row["outcome"] = verdict(score)
         factor_values: dict[str, list[float]] = {factor: [] for factor in FACTORS}
@@ -166,12 +185,29 @@ def apply_event(repo: Path, event: dict) -> dict:
         row["average_factor_points_json"] = serialize_points(
             {factor: mean(points) for factor, points in factor_values.items() if points}
         )
+        applied_points = factor_values
+        if aggregation.get("override_applied") and aggregation.get("selected_replicate"):
+            selected = valid_indices[aggregation["selected_replicate"] - 1]
+            raw = row.get(f"replicate_{selected}_factor_points_json") or "{}"
+            try:
+                selected_points = json.loads(raw)
+            except json.JSONDecodeError:
+                selected_points = {}
+            applied_points = {key: [float(selected_points.get(key, 0))] for key in FACTORS}
+        row["applied_factor_points_json"] = serialize_points(
+            {factor: values[0] for factor, values in applied_points.items() if values}
+        )
     else:
         row["average_score_exact"] = ""
         row["score"] = ""
         row["provisional_outcome"] = "uncertain"
         row["outcome"] = "uncertain"
         row["average_factor_points_json"] = "{}"
+        row["applied_factor_points_json"] = "{}"
+        row["score_range"] = ""
+        row["score_aggregation"] = ""
+        row["applied_replicate"] = ""
+        row["disagreement_review_required"] = "false"
     row["final_outcome"] = row.get("provisional_outcome", "") if confidence == 3 else ""
     if confidence == 3:
         row["assessment_state"] = "complete"
