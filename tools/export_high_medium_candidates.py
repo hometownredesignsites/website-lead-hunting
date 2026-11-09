@@ -8,10 +8,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from location_format import format_location
+
 
 FIELDS = [
-    "candidate_id", "business_name", "category", "city", "website_url",
-    "email", "phone", "contact_status", "email_source_url", "phone_source_url",
+    "candidate_id", "business_name", "category", "location", "website_url",
+    "email", "phone", "contact_status", "ContactSource", "phone_source_url",
     "combined_priority", "automated_priority", "automated_score",
     "visual_verdict", "visual_score", "visual_confidence",
     "visual_review_status", "latest_attempt_status", "evidence_summary",
@@ -65,16 +67,20 @@ def export(run_dir: Path, output: Path | None = None) -> dict[str, int]:
         latest_attempt = row.get("chatgpt_visual_review_last_attempt") or {}
         query = queries.get(str(row.get("source_query_index")), {})
         categories = manifest.get("categories") or []
+        source_location = row.get("configured_location") or query.get("location") or ""
+        location = format_location(source_location, row.get("region", ""))
+        if not location:
+            location = format_location(row.get("region", ""))
         selected.append({
             "candidate_id": row.get("candidate_id", ""),
             "business_name": row.get("business_name", ""),
             "category": row.get("category") or query.get("category") or (categories[0] if len(categories) == 1 else ""),
-            "city": row.get("configured_location") or query.get("location") or row.get("region", ""),
+            "location": location,
             "website_url": row.get("canonical_url") or row.get("final_url", ""),
             "email": contact.get("email", ""),
             "phone": contact.get("phone", ""),
             "contact_status": contact.get("status", "not_run" if site_checks.get("status") in {None, "unknown", "not_run"} else "not_found"),
-            "email_source_url": contact.get("email_source_url", ""),
+            "ContactSource": contact.get("email_source_url", ""),
             "phone_source_url": contact.get("phone_source_url", ""),
             "combined_priority": combined,
             "automated_priority": automated,

@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from visual_replicate_aggregation import (choose_aggregate_values,
                                           has_specific_scored_factor_evidence)
+from location_format import format_location
 
 
 FACTORS = (
@@ -25,8 +26,8 @@ FACTORS = (
 REPLICATES = (1, 2, 3)
 FIELDS = [
     "website_key", "candidate_id", "candidate_ids", "business_name", "website_url",
-    "category", "city", "email", "phone", "contact_status",
-    "email_source_url", "phone_source_url", "provider", "assessment_key", "source_run_key",
+    "category", "location", "email", "phone", "contact_status",
+    "ContactSource", "phone_source_url", "provider", "assessment_key", "source_run_key",
     "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
     "replicates_required",
 ]
@@ -113,11 +114,11 @@ def apply_event(repo: Path, event: dict) -> dict:
         "website_url": website_url,
         "business_name": str(context.get("business_name") or row.get("business_name") or ""),
         "category": str(context.get("category") or row.get("category") or ""),
-        "city": str(context.get("city") or row.get("city") or ""),
+        "location": str(context.get("location") or row.get("location") or ""),
         "email": str(context.get("email") or row.get("email") or ""),
         "phone": str(context.get("phone") or row.get("phone") or ""),
         "contact_status": str(context.get("contact_status") or row.get("contact_status") or "not_found"),
-        "email_source_url": str(context.get("email_source_url") or row.get("email_source_url") or ""),
+        "ContactSource": str(context.get("ContactSource") or context.get("email_source_url") or row.get("ContactSource") or ""),
         "phone_source_url": str(context.get("phone_source_url") or row.get("phone_source_url") or ""),
         "provider": provider,
         "source_run_key": event["source_run_key"],
@@ -304,8 +305,9 @@ def main() -> int:
                         "email": contact.get("email", ""),
                         "phone": contact.get("phone", ""),
                         "contact_status": contact.get("status", "not_found"),
-                        "email_source_url": contact.get("email_source_url", ""),
+                        "ContactSource": contact.get("email_source_url", ""),
                         "phone_source_url": contact.get("phone_source_url", ""),
+                        "location": format_location(candidate.get("configured_location", ""), candidate.get("region", "")),
                     })
                     break
         status = json.loads(args.attempt_status.read_text(encoding="utf-8"))
