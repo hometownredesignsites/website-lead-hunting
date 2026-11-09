@@ -82,7 +82,7 @@ Each private `runs/<run_key>/` folder contains:
 - `LOCATION_CATEGORY_PROGRESS.json` and `BEHAVIOR_LOG.jsonl` — progress and chronological events.
 - `GOOGLE_SEARCH_LEDGER.jsonl` and `search_evidence/google/` — optional raw Google comparison evidence.
 - `RUN_SUMMARY.json` and `RUN_SUMMARY.md` — validator report with expected/processed queries, returned/reviewed candidates, dispositions, site visits, and review status.
-- `HIGH_MEDIUM_CANDIDATES.csv` — import-ready shortlist of candidates with either an automated or Duck.ai visual high/medium opportunity signal. The private copy includes scores, current review/attempt statuses, concise evidence notes, best-found public email and phone, contact lookup status, and the page where each value was found.
+- `HIGH_MEDIUM_CANDIDATES.csv` — import-ready shortlist of candidates with either an automated or Duck.ai visual high/medium opportunity signal. The private copy includes scores, current review/attempt statuses, concise evidence notes, best-found public email and phone, contact lookup status, and the page where each value was found. The per-replicate private scoring exports also include these contact fields.
 - `DUCKAI_VISUAL_REVIEW_RETRY_QUEUE.json` — durable retry state for candidates awaiting an automatic delayed review.
 - `duckai/` — text response records and diagnostics. Screenshots are attached to the seven-day Actions artifact in the public repository for inference; they are not committed to either repository.
 
