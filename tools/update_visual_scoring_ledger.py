@@ -39,7 +39,7 @@ MASTER_FIELDS.extend((
     "average_score_exact", "score", "average_factor_points_json",
     "applied_factor_points_json", "applied_replicate", "score_range", "score_aggregation",
     "disagreement_review_required",
-    "provisional_outcome", "final_outcome", "outcome", "assessment_state",
+    "provisional_outcome", "final_outcome", "assessment_state",
     "latest_replicate_status", "updated_at", "actions_run_url",
 ))
 
@@ -185,7 +185,6 @@ def apply_event(repo: Path, event: dict) -> dict:
             if aggregation.get("override_applied") else ""
         )
         row["provisional_outcome"] = verdict(score)
-        row["outcome"] = verdict(score)
         factor_values: dict[str, list[float]] = {factor: [] for factor in FACTORS}
         for replicate in valid_indices:
             raw = row.get(f"replicate_{replicate}_factor_points_json") or "{}"
@@ -214,7 +213,6 @@ def apply_event(repo: Path, event: dict) -> dict:
         row["average_score_exact"] = ""
         row["score"] = ""
         row["provisional_outcome"] = "uncertain"
-        row["outcome"] = "uncertain"
         row["average_factor_points_json"] = "{}"
         row["applied_factor_points_json"] = "{}"
         row["score_range"] = ""
@@ -237,7 +235,7 @@ def apply_event(repo: Path, event: dict) -> dict:
     ))
     high_medium_rows = []
     for item in ordered:
-        if item.get("outcome") in {"high", "medium"}:
+        if item.get("provisional_outcome") in {"high", "medium"}:
             high_medium_rows.append({**item, "Preview_URLs_json": "[]"})
     for path, selected, fields in (
         (master_path, ordered, MASTER_FIELDS),
@@ -345,7 +343,7 @@ def main() -> int:
         rounded_average = row.get("score") or "Uncertain"
         line = (f"- {args.provider} replicate {args.replicate}/3 raw score: **{replicate_score}**; "
                 f"running average: **{running_average}** (rounded **{rounded_average}**; "
-                f"{row['outcome']}; confidence {row['confidence_level']}/3; "
+                f"{row['provisional_outcome']}; confidence {row['confidence_level']}/3; "
                 f"{row['assessment_state']}) — {row['business_name']} ({row['website_key']})\n")
         print(line.strip())
         if summary:

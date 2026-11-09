@@ -59,7 +59,7 @@ Each scorecard record stores process status separately from validation status, r
 
 The private `git-chatgpt` branch also maintains `scores/SCORING_MASTER.csv` and `scores/HIGH_MEDIUM_CANDIDATES.csv`. The master is updated immediately after each replicate and includes one row per normalized website host, individual replicate scores and factor-point breakdowns, running mean, and confidence level equal to the count of valid replicates (1–3). One- and two-replicate means are provisional; three valid replicates mark the score complete. The second CSV contains only current High and Medium outcomes, including provisional High/Medium results. Passes, uncertain results, and incomplete reviews remain visible in the master. Full evidence remains in the private run ledger and per-run scorecard records.
 
-In the private scoring CSVs, `provisional_outcome` is the current rating while valid replicates accumulate, `final_outcome` is populated only after all three valid replicates, and `outcome` is the current rating used for High/Medium filtering. The writer currently sets `outcome` equal to `provisional_outcome`, so those two columns duplicate one another; `final_outcome` distinguishes completed assessments from provisional ones.
+In the private scoring CSVs, `provisional_outcome` is the current rating while valid replicates accumulate, `final_outcome` is populated only after all three valid replicates; the High/Medium CSV filters directly on `provisional_outcome`. `final_outcome` distinguishes completed assessments from provisional ones.
 
 ## Human-label calibration
 
