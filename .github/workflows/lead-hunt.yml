@@ -273,6 +273,15 @@ jobs:
           python tools/private_results.py commit-run --private-repo private-results \
             --run-key "$RUN_KEY" --message "Record website lead-hunt batch: $RUN_KEY"
 
+      - name: Redact contact values from the public backup artifact
+        if: always()
+        env:
+          RUN_KEY: ${{ inputs.run_key }}
+        run: |
+          if [[ -f "runs/$RUN_KEY/CANDIDATE_LEDGER.jsonl" ]]; then
+            python tools/redact_contacts_for_public_artifact.py --run-dir "runs/$RUN_KEY"
+          fi
+
       - name: Upload a short-lived backup artifact
         if: always()
         uses: actions/upload-artifact@v6

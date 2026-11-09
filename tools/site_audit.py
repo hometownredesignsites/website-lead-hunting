@@ -12,7 +12,7 @@ import re
 from datetime import date, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 
 MAX_LINK_CHECKS = 12
@@ -25,6 +25,7 @@ PROJECT_RE = re.compile(r"portfolio|projects|case-stud|gallery|our-work|recent-w
 PRIVACY_RE = re.compile(r"privacy", re.I)
 DATE_KEYS = {"datepublished", "datemodified", "datecreated", "lastreviewed"}
 EMAIL_RE = re.compile(r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+", re.I)
+PHONE_RE = re.compile(r"(?:\+?1[ .-]?)?(?:\(?\d{3}\)?[ .-]?)\d{3}[ .-]\d{4}(?:\s*(?:x|ext\.?|extension)\s*\d+)?", re.I)
 CONSUMER_EMAIL_DOMAINS = {
     "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "yahoo.ca", "yahoo.co.jp",
     "yahoo.com.au", "ymail.com", "rocketmail.com", "outlook.com", "outlook.co.uk",
@@ -55,7 +56,8 @@ def _safe_url(url: str) -> str:
 
 
 _URL_IN_TEXT = re.compile(r"https?://[^\s<>\"']+")
-_URL_KEYS = {"url", "href", "final_url", "source_url", "page_url", "declared_url", "current_url", "location"}
+_URL_KEYS = {"url", "href", "final_url", "source_url", "page_url", "declared_url", "current_url", "location",
+             "email_source_url", "phone_source_url"}
 
 
 def _safe_payload(value):
@@ -114,6 +116,22 @@ def _classify_contact_emails(emails: list[str], website_url: str) -> dict:
             "scope_note": "Publicly displayed email addresses are a weak small-business clue, not proof of business size or redesign need."}
 
 
+def _normalize_phone(value: str) -> str:
+    """Return a readable North American phone value from visible text or a tel URI."""
+    value = unquote((value or "").strip())
+    value = re.sub(r"^tel:", "", value, flags=re.I).split("?", 1)[0].split(";", 1)[0]
+    value = value.strip(" <>.,;:()[]{}\t\r\n")
+    match = PHONE_RE.search(value)
+    if match:
+        return re.sub(r"\s+", " ", match.group(0)).strip()
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 10:
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+1 ({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
+    return ""
+
+
 def _iso_date(value: str | None) -> str | None:
     value = (value or "").strip()
     if not value:
@@ -142,6 +160,7 @@ class PageEvidenceParser(HTMLParser):
         self.project_links: list[str] = []
         self.contact_links: list[str] = []
         self.emails: list[str] = []
+        self.phones: list[str] = []
         self.last_modified: str | None = None
         self._article_depth = 0
         self._article_links: list[str] = []
@@ -163,6 +182,10 @@ class PageEvidenceParser(HTMLParser):
             href = urljoin(self.page_url, values["href"])
             if href.lower().startswith("mailto:"):
                 self.emails.extend(EMAIL_RE.findall(href[7:].split("?", 1)[0]))
+            elif href.lower().startswith("tel:"):
+                phone = _normalize_phone(href[4:])
+                if phone:
+                    self.phones.append(phone)
             self._anchor = {"href": href, "text": ""}
             if self._article_depth:
                 self._article_links.append(href)
@@ -224,6 +247,7 @@ class PageEvidenceParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         self.emails.extend(EMAIL_RE.findall(data))
+        self.phones.extend(match.group(0) for match in PHONE_RE.finditer(data))
         if self._anchor is not None:
             self._anchor["text"] = (self._anchor["text"] + " " + data).strip()[:300]
         if self._script_jsonld:
@@ -253,6 +277,12 @@ class PageEvidenceParser(HTMLParser):
             for key, value in item.items():
                 if key.lower() in DATE_KEYS and isinstance(value, str):
                     self._add_date(value, source, "jsonld:" + key)
+                elif key.lower() in {"telephone", "phone"} and isinstance(value, str):
+                    phone = _normalize_phone(value)
+                    if phone:
+                        self.phones.append(phone)
+                elif key.lower() == "email" and isinstance(value, str):
+                    self.emails.extend(EMAIL_RE.findall(value))
                 elif isinstance(value, (dict, list)):
                     self._walk_jsonld(value, source)
 
@@ -333,7 +363,7 @@ async def load_lazy_images(page) -> dict:
 
 
 async def collect_dom_facts(page) -> dict:
-    return await page.evaluate("""() => {
+    return await page.evaluate(r"""() => {
       const visible = el => !!(el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
       const attrs = el => ({tag: el.tagName.toLowerCase(), src: el.getAttribute('src'),
         href: el.getAttribute('href'), currentSrc: el.currentSrc || '', alt: el.getAttribute('alt') || '',
@@ -346,6 +376,12 @@ async def collect_dom_facts(page) -> dict:
       const emails = new Set((document.body?.innerText || '').match(emailPattern) || []);
       for (const a of document.querySelectorAll('a[href^="mailto:"]')) {
         for (const email of (a.getAttribute('href') || '').slice(7).split('?')[0].match(emailPattern) || []) emails.add(email);
+      }
+      const phonePattern = /(?:\+?1[ .-]?)?(?:\(?\d{3}\)?[ .-]?)\d{3}[ .-]\d{4}(?:\s*(?:x|ext\.?|extension)\s*\d+)?/ig;
+      const phones = new Set((document.body?.innerText || '').match(phonePattern) || []);
+      for (const a of document.querySelectorAll('a[href^="tel:"]')) {
+        const phone = (a.getAttribute('href') || '').slice(4).split(/[?;]/, 1)[0];
+        if (phone) phones.add(phone);
       }
       const resources = [];
       for (const el of document.querySelectorAll('img,source,script[src],iframe[src],video[src],video[poster],audio[src],link[href]')) {
@@ -452,6 +488,7 @@ async def collect_dom_facts(page) -> dict:
       const forms = [...formDetails, ...inferredForms].slice(0, 20);
       return {url: location.href, form_count: document.forms.length + inferredForms.length, forms,
         emails: [...emails].slice(0, 30),
+        phones: [...phones].slice(0, 30),
         title: document.title, viewport_meta: !!document.querySelector('meta[name="viewport"]'),
         document_width: document.documentElement.scrollWidth, viewport_width: document.documentElement.clientWidth,
         image_count: images.length, loaded_image_count: images.filter(i => i.complete && i.natural_width > 0).length,
@@ -522,6 +559,7 @@ async def _request_page(context, url: str, public_cache: dict[str, bool], public
         return {"url": url, "final_url": final_url, "status": response.status,
                 "redirected": bool(redirect_chain), "redirect_chain": redirect_chain, "form_count": parsed.forms,
         "emails": sorted(set(parsed.emails))[:30],
+        "phones": list(dict.fromkeys(phone for value in parsed.phones if (phone := _normalize_phone(value))))[:30],
         "privacy_links": sorted(set(parsed.privacy_links)), "blog_links": sorted(set(parsed.blog_links)),
         "project_links": sorted(set(parsed.project_links)),
                 "contact_links": sorted(set(parsed.contact_links)), "date_candidates": parsed.date_candidates,
@@ -791,11 +829,12 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
     image_request_failures = [row for row in failed_events if row.get("resource_type") == "image"]
     images_status = "issues_found" if failed_images or image_request_failures else "partial" if facts.get("pending_images") or not facts.get("image_loading", {}).get("complete", True) else "clear"
 
-    # Inspect linked contact pages when the homepage lacks either a form or a public email.
+    # Inspect linked Contact/About pages when contact details or form evidence are incomplete.
     contact_pages = []
     form_count = facts.get("form_count", 0)
     emails = list(facts.get("emails", []))
-    if not form_count or not emails:
+    phones = list(facts.get("phones", []))
+    if not form_count or not emails or not phones:
         for candidate in facts.get("contact_links", [])[:2]:
             if _same_site(candidate, base_url):
                 checked_page, error = await _request_page(page.context, candidate, public_host_cache, public_host_fn, base_url)
@@ -803,9 +842,10 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
                     contact_pages.append(checked_page)
                     form_count += checked_page.get("form_count", 0)
                     emails.extend(checked_page.get("emails", []))
+                    phones.extend(checked_page.get("phones", []))
                 elif error:
                     contact_pages.append({"url": candidate, "error": error})
-                if form_count and emails:
+                if form_count and emails and phones:
                     break
     privacy_links = sorted(set(facts.get("privacy_links", []) + [url for cp in contact_pages for url in cp.get("privacy_links", [])]))
     form_privacy = {"status": "issues_found" if form_count and not privacy_links else "clear" if form_count and privacy_links else "not_applicable",
@@ -816,6 +856,32 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
                     "scope_note": "Presence only; this does not assess legal adequacy. Contact-page checks are limited to linked same-site pages."}
     email_opportunity = _classify_contact_emails(emails, base_url)
     email_opportunity["pages_inspected"] = [base_url] + [cp.get("final_url") or cp.get("url") for cp in contact_pages]
+    contact_pages_data = [{"url": base_url, "emails": facts.get("emails", []), "phones": facts.get("phones", [])}]
+    contact_pages_data.extend({"url": cp.get("final_url") or cp.get("url", ""),
+                               "emails": cp.get("emails", []), "phones": cp.get("phones", [])}
+                              for cp in contact_pages if not cp.get("error"))
+    email_candidates, phone_candidates = [], []
+    for contact_page in contact_pages_data:
+        for value in contact_page["emails"]:
+            normalized = str(value or "").strip().strip(".,;:<>\"'()[]{}")
+            if EMAIL_RE.fullmatch(normalized) and normalized.lower() not in {item["value"].lower() for item in email_candidates}:
+                email_candidates.append({"value": normalized, "source_url": contact_page["url"]})
+        for value in contact_page["phones"]:
+            normalized = _normalize_phone(str(value or ""))
+            if normalized and normalized not in {item["value"] for item in phone_candidates}:
+                phone_candidates.append({"value": normalized, "source_url": contact_page["url"]})
+    contact_information = {
+        "status": "complete" if email_candidates and phone_candidates else
+                  "partial" if email_candidates or phone_candidates else "not_found",
+        "email": email_candidates[0]["value"] if email_candidates else "",
+        "phone": phone_candidates[0]["value"] if phone_candidates else "",
+        "email_source_url": email_candidates[0]["source_url"] if email_candidates else "",
+        "phone_source_url": phone_candidates[0]["source_url"] if phone_candidates else "",
+        "email_candidates": email_candidates[:10],
+        "phone_candidates": phone_candidates[:10],
+        "pages_inspected": [item["url"] for item in contact_pages_data],
+        "scope_note": "Publicly displayed values only; homepage plus up to two same-site Contact/About links. Forms are not submitted. Blank means not found in inspected pages, not that the business has no contact details.",
+    }
 
     # Discover linked blog/news pages. If none are linked, try a few conventional read-only routes.
     blog_candidates = [url for url in facts.get("blog_links", []) if _same_site(url, base_url)]
@@ -933,6 +999,7 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
             "pending_images": facts.get("pending_images", [])[:30]},
         "contact_form_privacy": form_privacy,
         "contact_email_opportunity": email_opportunity,
+        "contact_information": contact_information,
         "broken_links_and_interactions": {"status": "issues_found" if broken_links or fragment_issues or interactions["status"] == "issues_found" or console_errors else "clear",
             "internal_links_checked": len(internal_checked), "broken_internal_links": broken_links[:60],
             "broken_same_page_anchors": fragment_issues[:60], "interactions": interactions,
