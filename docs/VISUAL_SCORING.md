@@ -57,7 +57,7 @@ Each scorecard record stores process status separately from validation status, r
 
 The private `git-duckai` branch also maintains `scores/SCORING_MASTER.csv` and `scores/HIGH_MEDIUM_CANDIDATES.csv`. The master is updated after each of the three replicate attempts and records per-replicate scores and factor-point breakdowns, the running mean, and confidence level equal to the number of valid replicates (1–3). It also stores location with the full state name and contact details with `ContactSource` for the email's source page. One- and two-replicate means are provisional; three valid replicates mark the score complete. The second CSV includes only current High and Medium outcomes, including provisional results, omits replicate-status and factor-JSON columns, and includes `Preview_URLs_json` initialized to `[]`. Passes, uncertain results, and incomplete reviews remain in the master. Full evidence remains in the private run ledger and scorecard records.
 
-In the private scoring CSVs, `provisional_outcome` is the current rating while valid replicates accumulate, `final_outcome` is populated only after all three valid replicates, and `outcome` is the current rating used for High/Medium filtering. The writer currently sets `outcome` equal to `provisional_outcome`, so those two columns duplicate one another; `final_outcome` distinguishes completed assessments from provisional ones.
+In the private scoring CSVs, `provisional_outcome` is the current rating while valid replicates accumulate, `final_outcome` is populated only after all three valid replicates; the High/Medium CSV filters directly on `provisional_outcome`. `final_outcome` distinguishes completed assessments from provisional ones.
 
 ## Human-label calibration
 
