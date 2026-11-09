@@ -24,24 +24,34 @@ FACTORS = (
     "layout_mobile", "broken_images", "interactions",
 )
 REPLICATES = (1, 2, 3)
-FIELDS = [
-    "website_key", "candidate_id", "candidate_ids", "business_name", "website_url",
+MASTER_FIELDS = [
+    "website_key", "candidate_id", "business_name", "website_url",
     "category", "location", "email", "phone", "contact_status",
     "ContactSource", "phone_source_url", "provider", "assessment_key", "source_run_key",
     "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
     "replicates_required",
 ]
 for _replicate in REPLICATES:
-    FIELDS.extend((f"replicate_{_replicate}_status", f"replicate_{_replicate}_score",
-                   f"replicate_{_replicate}_factor_points_json",
-                   f"replicate_{_replicate}_evidence_supported"))
-FIELDS.extend((
+    MASTER_FIELDS.extend((f"replicate_{_replicate}_status", f"replicate_{_replicate}_score",
+                          f"replicate_{_replicate}_factor_points_json",
+                          f"replicate_{_replicate}_evidence_supported"))
+MASTER_FIELDS.extend((
     "average_score_exact", "score", "average_factor_points_json",
     "applied_factor_points_json", "applied_replicate", "score_range", "score_aggregation",
     "disagreement_review_required",
     "provisional_outcome", "final_outcome", "outcome", "assessment_state",
     "latest_replicate_status", "updated_at", "actions_run_url",
 ))
+
+HIGH_MEDIUM_OMIT_FIELDS = {
+    "replicates_required",
+    "replicate_1_status", "replicate_2_status", "replicate_3_status",
+    "replicate_1_factor_points_json", "replicate_2_factor_points_json", "replicate_3_factor_points_json",
+    "replicate_1_evidence_supported", "replicate_2_evidence_supported", "replicate_3_evidence_supported",
+    "average_score_exact", "applied_factor_points_json", "applied_replicate", "score_range",
+    "score_aggregation", "disagreement_review_required",
+}
+HIGH_MEDIUM_FIELDS = [field for field in MASTER_FIELDS if field not in HIGH_MEDIUM_OMIT_FIELDS]
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -68,7 +78,7 @@ def load_rows(path: Path) -> dict[str, dict[str, str]]:
         for row in reader:
             key = (row.get("website_key") or "").strip()
             if key:
-                rows[key] = {field: row.get(field, "") or "" for field in FIELDS}
+                rows[key] = {field: row.get(field, "") or "" for field in MASTER_FIELDS}
         return rows
 
 
@@ -94,22 +104,18 @@ def apply_event(repo: Path, event: dict) -> dict:
     key = canonical_key(website_url)
     provider = event["provider"]
     assessment_key = f"{event['review_run_id']}:{event['source_run_key']}:{event['source_run_id']}:{key}"
-    row = rows.get(key, {field: "" for field in FIELDS})
+    row = rows.get(key, {field: "" for field in MASTER_FIELDS})
     if row.get("assessment_key") != assessment_key:
-        row = {field: "" for field in FIELDS}
+        row = {field: "" for field in MASTER_FIELDS}
         row.update({
             "website_key": key,
             "candidate_id": candidate_id,
-            "candidate_ids": candidate_id,
             "provider": provider,
             "assessment_key": assessment_key,
             "source_run_key": event["source_run_key"],
             "source_lead_hunt_run_id": event["source_run_id"],
             "replicates_required": "3",
         })
-    else:
-        prior_ids = [value for value in row.get("candidate_ids", "").split("|") if value]
-        row["candidate_ids"] = "|".join(dict.fromkeys([*prior_ids, candidate_id]))
     row.update({
         "website_url": website_url,
         "business_name": str(context.get("business_name") or row.get("business_name") or ""),
@@ -229,10 +235,12 @@ def apply_event(repo: Path, event: dict) -> dict:
         (item.get("business_name") or "").casefold(),
         item.get("website_key", ""),
     ))
-    for path, selected in ((master_path, ordered),
-                           (high_medium_path, [r for r in ordered if r.get("outcome") in {"high", "medium"}])):
+    for path, selected, fields in (
+        (master_path, ordered, MASTER_FIELDS),
+        (high_medium_path, [r for r in ordered if r.get("outcome") in {"high", "medium"}], HIGH_MEDIUM_FIELDS),
+    ):
         with path.open("w", encoding="utf-8", newline="") as destination:
-            writer = csv.DictWriter(destination, fieldnames=FIELDS, extrasaction="ignore")
+            writer = csv.DictWriter(destination, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(selected)
     return row
