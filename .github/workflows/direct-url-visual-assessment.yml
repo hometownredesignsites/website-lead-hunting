@@ -92,6 +92,11 @@ jobs:
             --run-key "$RUN_KEY" \
             --message "Queue direct URL assessment: $RUN_KEY"
 
+      - name: Redact contact values from the public backup artifact
+        env:
+          RUN_KEY: ${{ steps.capture.outputs.run_key }}
+        run: python tools/redact_contacts_for_public_artifact.py --run-dir "runs/$RUN_KEY"
+
       - name: Upload source screenshots and candidate artifact
         uses: actions/upload-artifact@v6
         with:

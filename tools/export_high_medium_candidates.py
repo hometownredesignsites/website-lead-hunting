@@ -11,6 +11,7 @@ from typing import Any
 
 FIELDS = [
     "candidate_id", "business_name", "category", "city", "website_url",
+    "email", "phone", "contact_status", "email_source_url", "phone_source_url",
     "combined_priority", "automated_priority", "automated_score",
     "visual_verdict", "visual_score", "visual_confidence",
     "visual_review_status", "latest_attempt_status", "evidence_summary",
@@ -52,6 +53,7 @@ def export(run_dir: Path, output: Path | None = None) -> dict[str, int]:
             continue
         combined = "high" if "high" in priorities else "medium"
         site_checks = row.get("site_checks") or (row.get("evidence") or {}).get("site_checks") or {}
+        contact = site_checks.get("contact_information") or {}
         signals = row.get("signals") or {}
         signal_text = "; ".join(f"{key}: {value}" for key, value in signals.items()
                                  if str(value).lower() not in {"clear", "false", "none", "0", ""})
@@ -69,6 +71,11 @@ def export(run_dir: Path, output: Path | None = None) -> dict[str, int]:
             "category": row.get("category") or query.get("category") or (categories[0] if len(categories) == 1 else ""),
             "city": row.get("configured_location") or query.get("location") or row.get("region", ""),
             "website_url": row.get("canonical_url") or row.get("final_url", ""),
+            "email": contact.get("email", ""),
+            "phone": contact.get("phone", ""),
+            "contact_status": contact.get("status", "not_run" if site_checks.get("status") in {None, "unknown", "not_run"} else "not_found"),
+            "email_source_url": contact.get("email_source_url", ""),
+            "phone_source_url": contact.get("phone_source_url", ""),
             "combined_priority": combined,
             "automated_priority": automated,
             "automated_score": row.get("website_opportunity_score", ""),

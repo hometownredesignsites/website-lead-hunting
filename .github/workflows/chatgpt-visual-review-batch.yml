@@ -390,6 +390,7 @@ jobs:
               --branch git-chatgpt \
               --provider ChatGPT \
               --candidate-context "$REVIEW_DIR/website-review/candidate-context.json" \
+              --source-candidate-ledger "private-scoring/runs/${{ needs.plan.outputs.run_key }}/CANDIDATE_LEDGER.jsonl" \
               --result "$ATTEMPT_DIR/review-result.json" \
               --attempt-status "$ATTEMPT_DIR/attempt-status.json" \
               --replicate "$replicate" \

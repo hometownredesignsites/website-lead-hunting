@@ -25,7 +25,8 @@ FACTORS = (
 REPLICATES = (1, 2, 3)
 FIELDS = [
     "website_key", "candidate_id", "candidate_ids", "business_name", "website_url",
-    "category", "city", "provider", "assessment_key", "source_run_key",
+    "category", "city", "email", "phone", "contact_status",
+    "email_source_url", "phone_source_url", "provider", "assessment_key", "source_run_key",
     "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
     "replicates_required",
 ]
@@ -113,6 +114,11 @@ def apply_event(repo: Path, event: dict) -> dict:
         "business_name": str(context.get("business_name") or row.get("business_name") or ""),
         "category": str(context.get("category") or row.get("category") or ""),
         "city": str(context.get("city") or row.get("city") or ""),
+        "email": str(context.get("email") or row.get("email") or ""),
+        "phone": str(context.get("phone") or row.get("phone") or ""),
+        "contact_status": str(context.get("contact_status") or row.get("contact_status") or "not_found"),
+        "email_source_url": str(context.get("email_source_url") or row.get("email_source_url") or ""),
+        "phone_source_url": str(context.get("phone_source_url") or row.get("phone_source_url") or ""),
         "provider": provider,
         "source_run_key": event["source_run_key"],
         "source_lead_hunt_run_id": event["source_run_id"],
@@ -279,9 +285,29 @@ def main() -> int:
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--review-run-id", required=True)
     parser.add_argument("--actions-run-url", required=True)
+    parser.add_argument("--source-candidate-ledger", type=Path,
+                        help="Private source run ledger used to add contact values without putting them in public workflow artifacts")
     args = parser.parse_args()
     try:
         context = json.loads(args.candidate_context.read_text(encoding="utf-8"))
+        if args.source_candidate_ledger and args.source_candidate_ledger.is_file():
+            with args.source_candidate_ledger.open("r", encoding="utf-8-sig") as source:
+                for line in source:
+                    if not line.strip():
+                        continue
+                    candidate = json.loads(line)
+                    if candidate.get("candidate_id") != context.get("candidate_id"):
+                        continue
+                    checks = candidate.get("site_checks") or (candidate.get("evidence") or {}).get("site_checks") or {}
+                    contact = checks.get("contact_information") or {}
+                    context.update({
+                        "email": contact.get("email", ""),
+                        "phone": contact.get("phone", ""),
+                        "contact_status": contact.get("status", "not_found"),
+                        "email_source_url": contact.get("email_source_url", ""),
+                        "phone_source_url": contact.get("phone_source_url", ""),
+                    })
+                    break
         status = json.loads(args.attempt_status.read_text(encoding="utf-8"))
         result = json.loads(args.result.read_text(encoding="utf-8")) if args.result and args.result.is_file() else None
         if not isinstance(context, dict) or not context.get("candidate_id") or not context.get("website_url"):

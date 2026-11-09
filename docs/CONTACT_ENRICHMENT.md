@@ -1,0 +1,9 @@
+# Contact information in candidate CSVs
+
+The site audit collects publicly displayed contact values from the homepage and, when needed, up to two linked same-site Contact/About pages. It reads email addresses from page text, `mailto:` links, and structured data; phone numbers come from page text, `tel:` links, and structured data. The audit records the selected email and phone, source page URLs, inspected pages, and a status of `complete`, `partial`, or `not_found`. It does not submit forms or infer missing values.
+
+The normal lead-hunt export includes `email`, `phone`, `contact_status`, `email_source_url`, and `phone_source_url` in `runs/<run_key>/HIGH_MEDIUM_CANDIDATES.csv`. The visual scoring ledger receives contact values from the private source run ledger and keeps them in `scores/SCORING_MASTER.csv` and `scores/HIGH_MEDIUM_CANDIDATES.csv`. The high/medium file is refreshed as valid visual replicates arrive and includes only current Medium and High outcomes. Blank contact fields mean the bounded lookup did not find a value; they do not establish that a business has no contact details.
+
+The unredacted run ledger and CSV are committed to the private provider branch first. Before the public repository receives its temporary Actions artifact, a redaction step blanks raw email and phone values in the artifact copy while preserving contact status, provider-domain classification, and source page URLs. Screenshots can still visibly show public contact details. Actions logs and artifacts belong to the public workflow repository and expire according to its artifact retention policy; they are not part of the private repository.
+
+The extraction is a bounded automated aid, not contact verification. It can miss values rendered only after interaction, hidden in images, encoded unusually, or outside the inspected pages. Confirm the source page before outreach.
