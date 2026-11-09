@@ -14,27 +14,36 @@ from pathlib import Path
 from statistics import mean
 from urllib.parse import urlparse
 
+from location_format import format_location
+
 
 FACTORS = (
     "hero_imagery", "image_quality", "design_freshness", "readability",
     "layout_mobile", "broken_images", "interactions",
 )
 REPLICATES = (1, 2, 3)
-FIELDS = [
-    "website_key", "candidate_id", "candidate_ids", "business_name", "website_url",
-    "category", "city", "email", "phone", "contact_status",
-    "email_source_url", "phone_source_url", "provider", "assessment_key", "source_run_key",
+MASTER_FIELDS = [
+    "website_key", "candidate_id", "business_name", "website_url",
+    "category", "location", "email", "phone", "contact_status",
+    "ContactSource", "phone_source_url", "provider", "assessment_key", "source_run_key",
     "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
-    "replicates_valid", "replicates_required",
+    "replicates_required",
 ]
 for _replicate in REPLICATES:
-    FIELDS.extend((f"replicate_{_replicate}_status", f"replicate_{_replicate}_score",
-                   f"replicate_{_replicate}_factor_points_json"))
-FIELDS.extend((
+    MASTER_FIELDS.extend((f"replicate_{_replicate}_status", f"replicate_{_replicate}_score",
+                          f"replicate_{_replicate}_factor_points_json"))
+MASTER_FIELDS.extend((
     "average_score_exact", "score", "average_factor_points_json",
     "provisional_outcome", "final_outcome", "outcome", "assessment_state",
     "latest_replicate_status", "updated_at", "actions_run_url",
 ))
+HIGH_MEDIUM_OMIT_FIELDS = {
+    "replicates_required",
+    "replicate_1_status", "replicate_2_status", "replicate_3_status",
+    "replicate_1_factor_points_json", "replicate_2_factor_points_json", "replicate_3_factor_points_json",
+    "average_score_exact",
+}
+HIGH_MEDIUM_FIELDS = [field for field in MASTER_FIELDS if field not in HIGH_MEDIUM_OMIT_FIELDS]
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -61,7 +70,7 @@ def load_rows(path: Path) -> dict[str, dict[str, str]]:
         for row in reader:
             key = (row.get("website_key") or "").strip()
             if key:
-                rows[key] = {field: row.get(field, "") or "" for field in FIELDS}
+                rows[key] = {field: row.get(field, "") or "" for field in MASTER_FIELDS}
         return rows
 
 
@@ -91,31 +100,27 @@ def apply_event(repo: Path, event: dict) -> dict:
     key = canonical_key(website_url)
     provider = event["provider"]
     assessment_key = f"{event['review_run_id']}:{event['source_run_key']}:{event['source_run_id']}:{key}"
-    row = rows.get(key, {field: "" for field in FIELDS})
+    row = rows.get(key, {field: "" for field in MASTER_FIELDS})
     if row.get("assessment_key") != assessment_key:
-        row = {field: "" for field in FIELDS}
+        row = {field: "" for field in MASTER_FIELDS}
         row.update({
             "website_key": key,
             "candidate_id": candidate_id,
-            "candidate_ids": candidate_id,
             "provider": provider,
             "assessment_key": assessment_key,
             "source_run_key": event["source_run_key"],
             "source_lead_hunt_run_id": event["source_run_id"],
             "replicates_required": "3",
         })
-    else:
-        prior_ids = [value for value in row.get("candidate_ids", "").split("|") if value]
-        row["candidate_ids"] = "|".join(dict.fromkeys([*prior_ids, candidate_id]))
     row.update({
         "website_url": website_url,
         "business_name": str(context.get("business_name") or row.get("business_name") or ""),
         "category": str(context.get("category") or row.get("category") or ""),
-        "city": str(context.get("city") or row.get("city") or ""),
+        "location": str(context.get("location") or row.get("location") or ""),
         "email": str(context.get("email") or row.get("email") or ""),
         "phone": str(context.get("phone") or row.get("phone") or ""),
         "contact_status": str(context.get("contact_status") or row.get("contact_status") or "not_found"),
-        "email_source_url": str(context.get("email_source_url") or row.get("email_source_url") or ""),
+        "ContactSource": str(context.get("ContactSource") or context.get("email_source_url") or row.get("ContactSource") or ""),
         "phone_source_url": str(context.get("phone_source_url") or row.get("phone_source_url") or ""),
         "provider": provider,
         "source_run_key": event["source_run_key"],
@@ -152,7 +157,6 @@ def apply_event(repo: Path, event: dict) -> dict:
     scores = [int(row[f"replicate_{replicate}_score"]) for replicate in valid_indices]
     confidence = len(scores)
     row["confidence_level"] = str(confidence)
-    row["replicates_valid"] = str(confidence)
     row["latest_replicate_status"] = "passed" if valid_score else status
     if scores:
         exact = mean(scores)
@@ -193,10 +197,12 @@ def apply_event(repo: Path, event: dict) -> dict:
         (item.get("business_name") or "").casefold(),
         item.get("website_key", ""),
     ))
-    for path, selected in ((master_path, ordered),
-                           (high_medium_path, [r for r in ordered if r.get("outcome") in {"high", "medium"}])):
+    for path, selected, fields in (
+        (master_path, ordered, MASTER_FIELDS),
+        (high_medium_path, [r for r in ordered if r.get("outcome") in {"high", "medium"}], HIGH_MEDIUM_FIELDS),
+    ):
         with path.open("w", encoding="utf-8", newline="") as destination:
-            writer = csv.DictWriter(destination, fieldnames=FIELDS, extrasaction="ignore")
+            writer = csv.DictWriter(destination, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(selected)
     return row
@@ -271,8 +277,9 @@ def main() -> int:
                         "email": contact.get("email", ""),
                         "phone": contact.get("phone", ""),
                         "contact_status": contact.get("status", "not_found"),
-                        "email_source_url": contact.get("email_source_url", ""),
+                        "ContactSource": contact.get("email_source_url", ""),
                         "phone_source_url": contact.get("phone_source_url", ""),
+                        "location": format_location(candidate.get("configured_location", ""), candidate.get("region", "")),
                     })
                     break
         status = json.loads(args.attempt_status.read_text(encoding="utf-8"))
