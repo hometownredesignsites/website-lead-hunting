@@ -14,6 +14,11 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlsplit
 
+try:
+    from .contact_formatting import normalize_phone
+except ImportError:
+    from contact_formatting import normalize_phone
+
 
 MAX_LINK_CHECKS = 12
 MAX_LAZY_IMAGES = 20
@@ -117,19 +122,8 @@ def _classify_contact_emails(emails: list[str], website_url: str) -> dict:
 
 
 def _normalize_phone(value: str) -> str:
-    """Return a readable North American phone value from visible text or a tel URI."""
-    value = unquote((value or "").strip())
-    value = re.sub(r"^tel:", "", value, flags=re.I).split("?", 1)[0].split(";", 1)[0]
-    value = value.strip(" <>.,;:()[]{}\t\r\n")
-    match = PHONE_RE.search(value)
-    if match:
-        return re.sub(r"\s+", " ", match.group(0)).strip()
-    digits = re.sub(r"\D", "", value)
-    if len(digits) == 10:
-        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
-    if len(digits) == 11 and digits.startswith("1"):
-        return f"+1 ({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
-    return ""
+    """Return a consistently formatted North American number or blank."""
+    return normalize_phone(value)
 
 
 def _iso_date(value: str | None) -> str | None:

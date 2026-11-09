@@ -15,6 +15,7 @@ from statistics import mean
 from urllib.parse import urlparse
 
 from location_format import format_location
+from contact_formatting import normalize_phone
 
 
 FACTORS = (
@@ -72,6 +73,7 @@ def load_rows(path: Path) -> dict[str, dict[str, str]]:
             key = (row.get("website_key") or "").strip()
             if key:
                 rows[key] = {field: row.get(field, "") or "" for field in MASTER_FIELDS}
+                rows[key]["phone"] = normalize_phone(rows[key].get("phone", ""))
         return rows
 
 
@@ -119,7 +121,7 @@ def apply_event(repo: Path, event: dict) -> dict:
         "category": str(context.get("category") or row.get("category") or ""),
         "location": str(context.get("location") or row.get("location") or ""),
         "email": str(context.get("email") or row.get("email") or ""),
-        "phone": str(context.get("phone") or row.get("phone") or ""),
+        "phone": normalize_phone(context.get("phone") or row.get("phone") or ""),
         "contact_status": str(context.get("contact_status") or row.get("contact_status") or "not_found"),
         "ContactSource": str(context.get("ContactSource") or context.get("email_source_url") or row.get("ContactSource") or ""),
         "provider": provider,
