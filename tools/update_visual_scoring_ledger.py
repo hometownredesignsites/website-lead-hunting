@@ -238,10 +238,22 @@ def apply_event(repo: Path, event: dict) -> dict:
         (item.get("business_name") or "").casefold(),
         item.get("website_key", ""),
     ))
+    previous_preview_urls: dict[str, str] = {}
+    if high_medium_path.is_file():
+        with high_medium_path.open("r", encoding="utf-8-sig", newline="") as source:
+            for previous in csv.DictReader(source):
+                key = (previous.get("website_key") or "").strip()
+                if key:
+                    previous_preview_urls[key] = previous.get("Preview_URLs_json") or "[]"
+
     high_medium_rows = []
     for item in ordered:
         if item.get("provisional_outcome") in {"high", "medium"}:
-            high_medium_rows.append({**item, "Preview_URLs_json": "[]"})
+            key = item.get("website_key", "")
+            high_medium_rows.append({
+                **item,
+                "Preview_URLs_json": previous_preview_urls.get(key, "[]"),
+            })
     for path, selected, fields in (
         (master_path, ordered, MASTER_FIELDS),
         (high_medium_path, high_medium_rows, HIGH_MEDIUM_FIELDS),
