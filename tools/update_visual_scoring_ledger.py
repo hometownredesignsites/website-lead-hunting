@@ -27,7 +27,7 @@ REPLICATES = (1, 2, 3)
 MASTER_FIELDS = [
     "website_key", "candidate_id", "business_name", "website_url",
     "category", "location", "email", "phone", "contact_status",
-    "ContactSource", "phone_source_url", "provider", "assessment_key", "source_run_key",
+    "ContactSource", "provider", "assessment_key", "source_run_key",
     "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
     "replicates_required",
 ]
@@ -52,6 +52,7 @@ HIGH_MEDIUM_OMIT_FIELDS = {
     "score_aggregation", "disagreement_review_required",
 }
 HIGH_MEDIUM_FIELDS = [field for field in MASTER_FIELDS if field not in HIGH_MEDIUM_OMIT_FIELDS]
+HIGH_MEDIUM_FIELDS.append("Preview_URLs_json")
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -125,7 +126,6 @@ def apply_event(repo: Path, event: dict) -> dict:
         "phone": str(context.get("phone") or row.get("phone") or ""),
         "contact_status": str(context.get("contact_status") or row.get("contact_status") or "not_found"),
         "ContactSource": str(context.get("ContactSource") or context.get("email_source_url") or row.get("ContactSource") or ""),
-        "phone_source_url": str(context.get("phone_source_url") or row.get("phone_source_url") or ""),
         "provider": provider,
         "source_run_key": event["source_run_key"],
         "source_lead_hunt_run_id": event["source_run_id"],
@@ -235,9 +235,13 @@ def apply_event(repo: Path, event: dict) -> dict:
         (item.get("business_name") or "").casefold(),
         item.get("website_key", ""),
     ))
+    high_medium_rows = []
+    for item in ordered:
+        if item.get("outcome") in {"high", "medium"}:
+            high_medium_rows.append({**item, "Preview_URLs_json": "[]"})
     for path, selected, fields in (
         (master_path, ordered, MASTER_FIELDS),
-        (high_medium_path, [r for r in ordered if r.get("outcome") in {"high", "medium"}], HIGH_MEDIUM_FIELDS),
+        (high_medium_path, high_medium_rows, HIGH_MEDIUM_FIELDS),
     ):
         with path.open("w", encoding="utf-8", newline="") as destination:
             writer = csv.DictWriter(destination, fieldnames=fields, extrasaction="ignore")
@@ -314,7 +318,6 @@ def main() -> int:
                         "phone": contact.get("phone", ""),
                         "contact_status": contact.get("status", "not_found"),
                         "ContactSource": contact.get("email_source_url", ""),
-                        "phone_source_url": contact.get("phone_source_url", ""),
                         "location": format_location(candidate.get("configured_location", ""), candidate.get("region", "")),
                     })
                     break
