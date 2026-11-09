@@ -1,9 +1,25 @@
 import unittest
 
-from tools.site_audit import PageEvidenceParser, _age_fields, _copyright_footer_signal, _freshest_date
+from tools.site_audit import PageEvidenceParser, _age_fields, _copyright_footer_signal, _freshest_date, _normalize_phone
 
 
 class SiteAuditTests(unittest.TestCase):
+    def test_phone_numbers_use_one_parenthesized_format_without_country_prefix(self):
+        cases = {
+            "+1 (720) 409-6142": "(720) 409-6142",
+            "720) 409-6142": "(720) 409-6142",
+            "720.409.6142": "(720) 409-6142",
+            "720 409 6142": "(720) 409-6142",
+            "tel:+1-720-409-6142;ext=123": "(720) 409-6142 ext. 123",
+            "303-555-1212 x45": "(303) 555-1212 ext. 45",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(_normalize_phone(source), expected)
+
+    def test_incomplete_phone_is_not_exported_as_malformed_text(self):
+        self.assertEqual(_normalize_phone("720.409.61"), "")
+
     def test_extracts_forms_privacy_blog_and_project_evidence(self):
         parser = PageEvidenceParser("https://example.test/")
         parser.feed("""

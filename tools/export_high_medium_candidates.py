@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from location_format import format_location
+try:
+    from .contact_formatting import normalize_phone
+except ImportError:
+    from contact_formatting import normalize_phone
 
 
 FIELDS = [
@@ -78,7 +82,7 @@ def export(run_dir: Path, output: Path | None = None) -> dict[str, int]:
             "location": location,
             "website_url": row.get("canonical_url") or row.get("final_url", ""),
             "email": contact.get("email", ""),
-            "phone": contact.get("phone", ""),
+            "phone": normalize_phone(contact.get("phone", "")),
             "contact_status": contact.get("status", "not_run" if site_checks.get("status") in {None, "unknown", "not_run"} else "not_found"),
             "ContactSource": contact.get("email_source_url", ""),
             "Preview_URLs_json": "[]",
