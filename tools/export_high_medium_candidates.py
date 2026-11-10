@@ -17,7 +17,7 @@ except ImportError:
 
 FIELDS = [
     "candidate_id", "business_name", "category", "location", "website_url",
-    "email", "phone", "contact_status", "ContactSource", "Preview_URLs_json",
+    "email", "phone", "contact_status", "ContactSource", "PreviewURL",
     "combined_priority", "automated_priority", "automated_score",
     "visual_verdict", "visual_score", "visual_confidence",
     "visual_review_status", "latest_attempt_status", "evidence_summary",
@@ -85,7 +85,7 @@ def export(run_dir: Path, output: Path | None = None) -> dict[str, int]:
             "phone": normalize_phone(contact.get("phone", "")),
             "contact_status": contact.get("status", "not_run" if site_checks.get("status") in {None, "unknown", "not_run"} else "not_found"),
             "ContactSource": contact.get("email_source_url", ""),
-            "Preview_URLs_json": "[]",
+            "PreviewURL": "",
             "combined_priority": combined,
             "automated_priority": automated,
             "automated_score": row.get("website_opportunity_score", ""),

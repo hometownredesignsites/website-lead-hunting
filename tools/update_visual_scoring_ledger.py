@@ -56,7 +56,7 @@ HIGH_MEDIUM_OMIT_FIELDS = {
     "score_aggregation", "disagreement_review_required",
 }
 HIGH_MEDIUM_FIELDS = [field for field in MASTER_FIELDS if field not in HIGH_MEDIUM_OMIT_FIELDS]
-HIGH_MEDIUM_FIELDS.append("Preview_URLs_json")
+HIGH_MEDIUM_FIELDS.append("PreviewURL")
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -238,13 +238,13 @@ def apply_event(repo: Path, event: dict) -> dict:
         (item.get("business_name") or "").casefold(),
         item.get("website_key", ""),
     ))
-    previous_preview_urls: dict[str, str] = {}
+    previous_preview_url: dict[str, str] = {}
     if high_medium_path.is_file():
         with high_medium_path.open("r", encoding="utf-8-sig", newline="") as source:
             for previous in csv.DictReader(source):
                 key = (previous.get("website_key") or "").strip()
                 if key:
-                    previous_preview_urls[key] = previous.get("Preview_URLs_json") or "[]"
+                    previous_preview_url[key] = previous.get("PreviewURL") or ""
 
     high_medium_rows = []
     for item in ordered:
@@ -252,7 +252,7 @@ def apply_event(repo: Path, event: dict) -> dict:
             key = item.get("website_key", "")
             high_medium_rows.append({
                 **item,
-                "Preview_URLs_json": previous_preview_urls.get(key, "[]"),
+                "PreviewURL": previous_preview_url.get(key, ""),
             })
     for path, selected, fields in (
         (master_path, ordered, MASTER_FIELDS),
