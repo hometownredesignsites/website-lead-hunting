@@ -541,6 +541,18 @@ async def page_metrics(page) -> dict:
         pushMedia(img, 'image', img.naturalWidth || 0, img.naturalHeight || 0, img.alt || '');
       for (const video of document.querySelectorAll('video')) if (visible(video))
         pushMedia(video, 'video', video.videoWidth || 0, video.videoHeight || 0, video.getAttribute('aria-label') || '');
+      // Many site builders (including Elementor) render hero videos through a
+      // cross-origin YouTube/Vimeo iframe. The frame itself cannot be inspected,
+      // so only classify embeds from known video hosts as video media.
+      const videoEmbed = iframe => {
+        const source = [iframe.src, iframe.getAttribute('data-src'),
+          iframe.getAttribute('data-lazy-src'), iframe.getAttribute('data-video-url')]
+          .filter(Boolean).join(' ').toLowerCase();
+        return /(?:youtube(?:-nocookie)?\.com\/(?:embed|shorts|live)\/|youtu\.be\/|player\.vimeo\.com\/video\/|fast\.wistia\.(?:net|com)\/embed\/|wistia\.(?:net|com)\/medias\/|player\.streamable\.com\/|dailymotion\.com\/embed\/|player\.brightcove\.net\/)/i.test(source);
+      };
+      for (const iframe of document.querySelectorAll('iframe'))
+        if (visible(iframe) && videoEmbed(iframe))
+          pushMedia(iframe, 'video', 0, 0, iframe.title || iframe.getAttribute('aria-label') || '');
       for (const el of [document.body, ...document.querySelectorAll('body *')].slice(0, 1600)) {
         if (!visible(el)) continue;
         const background = getComputedStyle(el).backgroundImage;
@@ -553,8 +565,8 @@ async def page_metrics(page) -> dict:
         primary_cta: cta ? {text:(cta.innerText || cta.textContent || '').trim().slice(0,180), ...ctaRect} : null,
         media_candidates: media.slice(0,30), prominent_media_count:prominentCount,
         detection_note: !headline ? 'No visible first-viewport h1; hero boundary is uncertain.' :
-          prominentCount ? 'At least one prominent image, video, or CSS background image is visible in the first viewport.' :
-          'No prominent image, video, or CSS background image was detected in the first viewport.'};
+          prominentCount ? 'At least one prominent image, video, known video embed, or CSS background image is visible in the first viewport.' :
+          'No prominent image, video, known video embed, or CSS background image was detected in the first viewport.'};
       return {
         viewportMeta: !!document.querySelector('meta[name="viewport"]'),
         documentWidth: document.documentElement.scrollWidth,

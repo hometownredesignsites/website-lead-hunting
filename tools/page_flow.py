@@ -50,6 +50,8 @@ async def inspect_page_flow(page) -> dict:
         const w=Math.min(innerWidth,r.right)-Math.max(0,r.left),h=Math.min(viewportHeight,r.bottom)-Math.max(0,r.top),area=w*h*100/Math.max(1,innerWidth*viewportHeight);
         if(w>=120&&h>=90&&area>=8&&(type==='video'||loaded!==false))heroMedia.push({type,...absRect(el),viewport_area_percent:Math.round(area*10)/10,loaded,video_present:type==='video'});};
       for(const el of document.querySelectorAll('img,video')){const loaded=el.tagName==='IMG'?el.complete&&el.naturalWidth>0:el.videoWidth>0;addHero(el,el.tagName.toLowerCase(),loaded);}
+      const videoEmbed=el=>{const source=[el.src,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),el.getAttribute('data-video-url')].filter(Boolean).join(' ').toLowerCase();return /(?:youtube(?:-nocookie)?\.com\/(?:embed|shorts|live)\/|youtu\.be\/|player\.vimeo\.com\/video\/|fast\.wistia\.(?:net|com)\/embed\/|wistia\.(?:net|com)\/medias\/|player\.streamable\.com\/|dailymotion\.com\/embed\/|player\.brightcove\.net\/)/i.test(source);};
+      for(const el of document.querySelectorAll('iframe'))if(videoEmbed(el))addHero(el,'video',true);
       for(const el of [document.body,...document.querySelectorAll('body *')].slice(0,1600))if(/url\\s*\\(/i.test(getComputedStyle(el).backgroundImage||''))addHero(el,'background_image');
       return {viewport:{width:innerWidth,height:viewportHeight},
         meaningful_image_count:images.length, first_content_image:images[0]||null,
