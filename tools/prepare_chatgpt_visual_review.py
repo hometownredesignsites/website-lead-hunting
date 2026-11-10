@@ -241,6 +241,30 @@ def main() -> int:
     candidate = load_candidate(run_dir, args.candidate_id)
     screenshot_record = candidate.get("screenshots") or {}
     override_dir = args.screenshot_override_dir.resolve() if args.screenshot_override_dir else None
+    if override_dir is not None:
+        recapture_manifest_path = override_dir / "recapture-manifest.json"
+        if recapture_manifest_path.is_file():
+            recapture_manifest = json.loads(recapture_manifest_path.read_text(encoding="utf-8"))
+            captures = [item for item in recapture_manifest.get("screenshots", [])
+                        if isinstance(item, dict) and item.get("viewport") in {"desktop", "mobile"}]
+            refreshed_flow = {item["viewport"]: item.get("page_flow") or {}
+                              for item in captures if item.get("page_flow")}
+            refreshed_hero = {item["viewport"]: item.get("hero_media") or
+                              (item.get("page_flow") or {}).get("hero_media", {})
+                              for item in captures}
+            if refreshed_flow:
+                statuses = [item.get("status") for item in refreshed_hero.values()]
+                overall = ("uncertain" if "uncertain" in statuses else
+                           "absent" if "absent" in statuses else
+                           "present" if "present" in statuses else "uncertain")
+                candidate = dict(candidate)
+                candidate["visual_page_flow"] = refreshed_flow
+                candidate["hero_media"] = {
+                    "status": overall,
+                    "trigger_views": [key for key, value in refreshed_hero.items()
+                                      if value.get("status") in {"absent", "uncertain"}],
+                    **refreshed_hero,
+                }
     page_flow = script_audit_summary(candidate).get("visual_page_flow") or {}
     output_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []

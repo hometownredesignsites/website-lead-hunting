@@ -91,6 +91,7 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
         mid_target = output_dir / f"{viewport_name}_mid.png"
         await page.screenshot(path=str(top_target), full_page=False, animations="disabled", timeout=45000)
         flow = await inspect_page_flow(page)
+        top_page_flow = flow
         target_terms = ("project", "portfolio", "gallery", "our work", "recent work", "before", "after",
                         "remodel", "renovation", "service")
         def find_target(images):
@@ -217,6 +218,8 @@ async def capture_viewport(browser, url: str, viewport_name: str, output_dir: Pa
             "final_url": final_url,
             "path": top_target.name,
             "mid_path": mid_target.name,
+            "page_flow": top_page_flow,
+            "hero_media": top_page_flow.get("hero_media", {}),
             "mid_capture_target": capture_target,
             "scroll_validation": {
                 "method": "+".join(methods_used),
