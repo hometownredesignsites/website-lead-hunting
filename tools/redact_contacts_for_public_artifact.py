@@ -26,15 +26,19 @@ def redact_candidate(row: dict) -> dict:
             contact["phone_candidate_count"] = len(contact.get("phone_candidates") or [])
             contact["email"] = ""
             contact["phone"] = ""
+            contact["contact_name"] = ""
             contact.pop("email_candidates", None)
             contact.pop("phone_candidates", None)
+            contact.pop("contact_name_candidates", None)
+            contact.pop("contact_name_source_url", None)
+            contact.pop("contact_name_confidence", None)
         email_signal = checks.get("contact_email_opportunity") or {}
         if isinstance(email_signal.get("emails_found"), list):
             email_signal["emails_found"] = [
                 {key: value for key, value in item.items() if key != "email"}
                 for item in email_signal["emails_found"] if isinstance(item, dict)
             ]
-    for key in ("email", "phone"):
+    for key in ("email", "phone", "contact_name"):
         if key in row:
             row[key] = ""
     return row
@@ -62,7 +66,7 @@ def redact_run(run_dir: Path) -> dict[str, int]:
             fields = list(reader.fieldnames or [])
             rows = list(reader)
         for row in rows:
-            for field in ("email", "phone"):
+            for field in ("email", "phone", "contact_name"):
                 if field in row:
                     row[field] = ""
         temp = csv_path.with_suffix(".csv.tmp")

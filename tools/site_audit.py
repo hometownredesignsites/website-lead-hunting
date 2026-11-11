@@ -25,6 +25,22 @@ MAX_LAZY_IMAGES = 20
 MAX_INTERACTIONS = 8
 REQUEST_TIMEOUT_MS = 4500
 CONTACT_RE = re.compile(r"contact|contact-us|get-in-touch|reach-us", re.I)
+PERSON_PAGE_RE = re.compile(r"about|team|leadership|staff|our-story|company", re.I)
+PERSON_ROLE_RE = re.compile(
+    r"co-owner|owner|co-founder|founder|president|chief executive officer|\bceo\b|"
+    r"managing partner|managing member|general manager|principal|contact person|contact",
+    re.I,
+)
+PERSON_NAME = r"[A-Z][A-Za-z’'`.-]+(?:\s+[A-Z][A-Za-z’'`.-]+){1,3}"
+ROLE_THEN_NAME_RE = re.compile(
+    rf"\b(?P<role>{PERSON_ROLE_RE.pattern})\b\s*(?:is\s+|[:\-–—|]\s*)?(?P<name>{PERSON_NAME})",
+    re.I,
+)
+NAME_THEN_ROLE_RE = re.compile(
+    rf"(?P<name>{PERSON_NAME})\s*(?:,|\||[–—-]|\bis\s+(?:the\s+)?)\s*"
+    rf"(?P<role>{PERSON_ROLE_RE.pattern})\b",
+    re.I,
+)
 BLOG_RE = re.compile(r"blog|news|journal|articles|stories|updates", re.I)
 PROJECT_RE = re.compile(r"portfolio|projects|case-stud|gallery|our-work|recent-work", re.I)
 REVIEW_PAGE_RE = re.compile(r"service|what-we-do|about|portfolio|projects|case-stud|gallery|our-work|contact", re.I)
@@ -127,6 +143,42 @@ def _normalize_phone(value: str) -> str:
     return normalize_phone(value)
 
 
+def _contact_name_candidates(text: str, source_url: str, structured_people: list[dict] | None = None) -> list[dict]:
+    """Find names only when public site text explicitly connects them to a contact role."""
+    found: list[dict] = []
+    seen: set[str] = set()
+
+    def add(name: str, role: str, source: str, confidence: str) -> None:
+        clean_name = re.sub(r"\s+", " ", (name or "")).strip(" ,|–—-\t\r\n")
+        clean_role = re.sub(r"\s+", " ", (role or "")).strip(" ,|–—-\t\r\n")
+        if not re.fullmatch(PERSON_NAME, clean_name) or not clean_role:
+            return
+        key = (clean_name + "|" + clean_role).casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        found.append({"value": f"{clean_name}, {clean_role.title()}", "name": clean_name,
+                      "title": clean_role.title(), "source_url": _safe_url(source_url),
+                      "source": source, "confidence": confidence})
+
+    for match in ROLE_THEN_NAME_RE.finditer(text or ""):
+        add(match.group("name"), match.group("role"), "labeled_visible_text", "high")
+    for match in NAME_THEN_ROLE_RE.finditer(text or ""):
+        add(match.group("name"), match.group("role"), "labeled_visible_text", "high")
+    for person in structured_people or []:
+        if not isinstance(person, dict):
+            continue
+        role = str(person.get("title") or person.get("relationship") or "").strip()
+        name = str(person.get("name") or "").strip()
+        if role and PERSON_ROLE_RE.search(role):
+            add(name, role, "structured_person", "high")
+    # Prefer explicit owner/founder/executive records; otherwise use a named contact.
+    priority = ("owner", "founder", "president", "chief executive", "ceo", "managing", "principal", "general manager", "contact")
+    found.sort(key=lambda item: next((index for index, role in enumerate(priority)
+                                     if role in item["title"].casefold()), len(priority)))
+    return found[:10]
+
+
 def _iso_date(value: str | None) -> str | None:
     value = (value or "").strip()
     if not value:
@@ -154,8 +206,11 @@ class PageEvidenceParser(HTMLParser):
         self.blog_links: list[str] = []
         self.project_links: list[str] = []
         self.contact_links: list[str] = []
+        self.person_links: list[str] = []
         self.emails: list[str] = []
         self.phones: list[str] = []
+        self.visible_text_parts: list[str] = []
+        self.structured_people: list[dict] = []
         self.images: list[dict] = []
         self.title = ""
         self.text_chars = 0
@@ -166,11 +221,16 @@ class PageEvidenceParser(HTMLParser):
         self._article_dates: list[str] = []
         self._script_jsonld = False
         self._script_chunks: list[str] = []
+        self._ignored_text_depth = 0
         self._meta: dict[str, str] = {}
         self._anchor: dict | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.lower(): (value or "") for key, value in attrs}
+        if tag in {"script", "style", "noscript", "svg"}:
+            self._ignored_text_depth += 1
+        if tag in {"address", "article", "blockquote", "br", "dd", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "p", "section", "td", "th"}:
+            self.visible_text_parts.append("\n")
         if tag == "form":
             self.forms += 1
         if tag == "title":
@@ -197,6 +257,8 @@ class PageEvidenceParser(HTMLParser):
                 self.privacy_links.append(href)
             if CONTACT_RE.search(descriptor):
                 self.contact_links.append(href)
+            if PERSON_PAGE_RE.search(descriptor):
+                self.person_links.append(href)
             if BLOG_RE.search(descriptor):
                 self.blog_links.append(href)
             if PROJECT_RE.search(descriptor):
@@ -219,6 +281,10 @@ class PageEvidenceParser(HTMLParser):
             self._script_chunks = []
 
     def handle_endtag(self, tag: str) -> None:
+        if tag in {"address", "article", "blockquote", "br", "dd", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "p", "section", "td", "th"}:
+            self.visible_text_parts.append("\n")
+        if tag in {"script", "style", "noscript", "svg"} and self._ignored_text_depth:
+            self._ignored_text_depth -= 1
         if tag == "title":
             self._in_title = False
         if tag == "a" and self._anchor is not None:
@@ -228,6 +294,8 @@ class PageEvidenceParser(HTMLParser):
                     self.privacy_links.append(self._anchor["href"])
                 if CONTACT_RE.search(descriptor):
                     self.contact_links.append(self._anchor["href"])
+                if PERSON_PAGE_RE.search(descriptor):
+                    self.person_links.append(self._anchor["href"])
                 if BLOG_RE.search(descriptor):
                     self.blog_links.append(self._anchor["href"])
                 if PROJECT_RE.search(descriptor):
@@ -252,6 +320,8 @@ class PageEvidenceParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         self.text_chars += len(data.strip())
+        if not self._ignored_text_depth:
+            self.visible_text_parts.append(data)
         if self._in_title:
             self.title = (self.title + " " + data).strip()[:300]
         self.emails.extend(EMAIL_RE.findall(data))
@@ -271,10 +341,10 @@ class PageEvidenceParser(HTMLParser):
         if normalized:
             self.date_candidates.append({"date": normalized, "source_url": source_url, "source": kind})
 
-    def _walk_jsonld(self, item, inherited_url: str | None = None) -> None:
+    def _walk_jsonld(self, item, inherited_url: str | None = None, relationship: str = "") -> None:
         if isinstance(item, list):
             for child in item:
-                self._walk_jsonld(child, inherited_url)
+                self._walk_jsonld(child, inherited_url, relationship)
         elif isinstance(item, dict):
             source = item.get("url") or item.get("@id") or inherited_url or self.page_url
             main_entity = item.get("mainEntityOfPage")
@@ -282,6 +352,14 @@ class PageEvidenceParser(HTMLParser):
                 source = main_entity.get("@id") or main_entity.get("url") or source
             if isinstance(source, str):
                 source = urljoin(self.page_url, source)
+            types = item.get("@type") or []
+            if isinstance(types, str):
+                types = [types]
+            if any(str(kind).casefold() == "person" for kind in types) and isinstance(item.get("name"), str):
+                title = item.get("jobTitle") if isinstance(item.get("jobTitle"), str) else ""
+                if title or relationship.casefold() in {"founder", "employee", "contactpoint", "contactperson"}:
+                    self.structured_people.append({"name": item["name"], "title": title,
+                                                   "relationship": relationship, "source_url": source})
             for key, value in item.items():
                 if key.lower() in DATE_KEYS and isinstance(value, str):
                     self._add_date(value, source, "jsonld:" + key)
@@ -292,7 +370,7 @@ class PageEvidenceParser(HTMLParser):
                 elif key.lower() == "email" and isinstance(value, str):
                     self.emails.extend(EMAIL_RE.findall(value))
                 elif isinstance(value, (dict, list)):
-                    self._walk_jsonld(value, source)
+                    self._walk_jsonld(value, source, key)
 
 
 class PageObserver:
@@ -450,16 +528,22 @@ async def collect_dom_facts(page) -> dict:
         if (/datepublished|datemodified|article:published_time|article:modified_time|last-modified/.test(key))
           dates.push({date: m.content || '', text: '', source_url: location.href, source: 'meta:' + key});
       }
+      const structured_people = [];
       for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
         try {
-          const walk = (obj, inherited) => {
-            if (Array.isArray(obj)) { for (const x of obj) walk(x, inherited); return; }
+          const walk = (obj, inherited, relationship = '') => {
+            if (Array.isArray(obj)) { for (const x of obj) walk(x, inherited, relationship); return; }
             if (!obj || typeof obj !== 'object') return;
             const source = obj.url || obj['@id'] || obj.mainEntityOfPage?.['@id'] || inherited || location.href;
+            const typeList = Array.isArray(obj['@type']) ? obj['@type'] : [obj['@type'] || ''];
+            if (typeList.some(type => String(type).toLowerCase() === 'person') && obj.name &&
+                (obj.jobTitle || /founder|employee|contact/i.test(relationship)))
+              structured_people.push({name: String(obj.name), title: String(obj.jobTitle || ''),
+                relationship, source_url: new URL(source, location.href).href});
             for (const [key, value] of Object.entries(obj)) {
               if (/^(datePublished|dateModified|dateCreated|lastReviewed)$/i.test(key) && typeof value === 'string')
                 dates.push({date: value, text: '', source_url: new URL(source, location.href).href, source: 'jsonld:' + key});
-              else if (value && typeof value === 'object') walk(value, source);
+              else if (value && typeof value === 'object') walk(value, source, key);
             }
           };
           walk(JSON.parse(s.textContent || 'null'), location.href);
@@ -467,6 +551,7 @@ async def collect_dom_facts(page) -> dict:
       }
       const privacy_links = anchors.filter(a => /privacy/i.test(a.href + ' ' + a.text)).map(a => a.href);
       const contact_links = anchors.filter(a => /contact|contact-us|get-in-touch|reach-us/i.test(a.href + ' ' + a.text)).map(a => a.href);
+      const person_links = anchors.filter(a => /about|team|leadership|staff|our-story|company/i.test(a.href + ' ' + a.text)).map(a => a.href);
       const blog_links = anchors.filter(a => /blog|news|journal|articles|stories|updates/i.test(a.href + ' ' + a.text)).map(a => a.href);
       const project_links = anchors.filter(a => /portfolio|projects|case-stud|gallery|our-work|recent-work/i.test(a.href + ' ' + a.text)).map(a => a.href);
       const twitter_assets = [];
@@ -562,6 +647,8 @@ async def collect_dom_facts(page) -> dict:
         pending_images: images.filter(i => !i.complete).slice(0, 30),
         images: images.slice(0, 300), anchors, resources: resources.slice(0, 500), dates: dates.slice(0, 100),
         privacy_links: [...new Set(privacy_links)].slice(0, 30), contact_links: [...new Set(contact_links)].slice(0, 30),
+        person_links: [...new Set(person_links)].slice(0, 30), visible_text: (document.body?.innerText || '').slice(0, 40000),
+        structured_people: structured_people.slice(0, 20),
         blog_links: [...new Set(blog_links)].slice(0, 30), project_links: [...new Set(project_links)].slice(0, 30),
         copyright_years,
         has_contact_path: contact_links.length > 0, has_cta: anchors.some(a => /contact|call|visit|book|schedule|request|get a quote|estimate|get in touch/i.test(a.text)),
@@ -630,11 +717,15 @@ async def _request_page(context, url: str, public_cache: dict[str, bool], public
                 "redirected": bool(redirect_chain), "redirect_chain": redirect_chain, "form_count": parsed.forms,
                 "title": parsed.title, "images": parsed.images[:100],
                 "text_chars": parsed.text_chars,
+                "visible_text": " ".join(" ".join(parsed.visible_text_parts).split())[:40000],
+                "contact_name_candidates": _contact_name_candidates(
+                    " ".join(parsed.visible_text_parts), final_url, parsed.structured_people),
         "emails": sorted(set(parsed.emails))[:30],
         "phones": list(dict.fromkeys(phone for value in parsed.phones if (phone := _normalize_phone(value))))[:30],
         "privacy_links": sorted(set(parsed.privacy_links)), "blog_links": sorted(set(parsed.blog_links)),
         "project_links": sorted(set(parsed.project_links)),
-                "contact_links": sorted(set(parsed.contact_links)), "date_candidates": parsed.date_candidates,
+                "contact_links": sorted(set(parsed.contact_links)),
+                "person_links": sorted(set(parsed.person_links)), "date_candidates": parsed.date_candidates,
                 "links": parsed.links[:300], "last_modified": response.headers.get("last-modified")}, None
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"[:250]
@@ -933,13 +1024,18 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
     pending_images_outside_policy = (any(item.get("loading") != "lazy" for item in pending_images)
                                      or (pending_images and not sample_sufficient))
 
-    # Inspect linked Contact/About pages when contact details or form evidence are incomplete.
+    # Inspect a small number of linked Contact/About/Team pages when contact evidence is incomplete.
     contact_pages = []
     form_count = facts.get("form_count", 0)
     emails = list(facts.get("emails", []))
     phones = list(facts.get("phones", []))
-    if not form_count or not emails or not phones:
-        for candidate in facts.get("contact_links", [])[:2]:
+    contact_name_candidates = _contact_name_candidates(
+        facts.get("visible_text", ""), base_url, facts.get("structured_people", []))
+    priority_links = (facts.get("person_links", []) + facts.get("contact_links", [])
+                      if not contact_name_candidates else facts.get("contact_links", []) + facts.get("person_links", []))
+    page_candidates = list(dict.fromkeys(priority_links))
+    if not form_count or not emails or not phones or not contact_name_candidates:
+        for candidate in page_candidates[:2]:
             if _same_site(candidate, base_url):
                 checked_page, error = await _request_page(page.context, candidate, public_host_cache, public_host_fn, base_url)
                 if checked_page:
@@ -947,9 +1043,10 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
                     form_count += checked_page.get("form_count", 0)
                     emails.extend(checked_page.get("emails", []))
                     phones.extend(checked_page.get("phones", []))
+                    contact_name_candidates.extend(checked_page.get("contact_name_candidates", []))
                 elif error:
                     contact_pages.append({"url": candidate, "error": error})
-                if form_count and emails and phones:
+                if form_count and emails and phones and contact_name_candidates:
                     break
     privacy_links = sorted(set(facts.get("privacy_links", []) + [url for cp in contact_pages for url in cp.get("privacy_links", [])]))
     form_privacy = {"status": "issues_found" if form_count and not privacy_links else "clear" if form_count and privacy_links else "not_applicable",
@@ -981,10 +1078,14 @@ async def run_site_checks(page, base_url: str, observer: PageObserver, public_ho
         "phone": phone_candidates[0]["value"] if phone_candidates else "",
         "email_source_url": email_candidates[0]["source_url"] if email_candidates else "",
         "phone_source_url": phone_candidates[0]["source_url"] if phone_candidates else "",
+        "contact_name": contact_name_candidates[0]["value"] if contact_name_candidates else "",
+        "contact_name_source_url": contact_name_candidates[0]["source_url"] if contact_name_candidates else "",
+        "contact_name_confidence": contact_name_candidates[0]["confidence"] if contact_name_candidates else "none",
         "email_candidates": email_candidates[:10],
         "phone_candidates": phone_candidates[:10],
+        "contact_name_candidates": contact_name_candidates[:10],
         "pages_inspected": [item["url"] for item in contact_pages_data],
-        "scope_note": "Publicly displayed values only; homepage plus up to two same-site Contact/About links. Forms are not submitted. Blank means not found in inspected pages, not that the business has no contact details.",
+        "scope_note": "Publicly displayed values only; homepage plus up to two same-site Contact/About/Team links. Contact names require an explicit role label or structured Person role. Forms are not submitted. Blank means not found in inspected pages, not that the business has no contact details.",
     }
 
     # Discover linked blog/news pages. If none are linked, try a few conventional read-only routes.

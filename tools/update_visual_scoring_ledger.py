@@ -30,7 +30,7 @@ FACTORS = (
 REPLICATES = (1, 2, 3)
 MASTER_FIELDS = [
     "website_key", "candidate_id", "business_name", "website_url",
-    "category", "location", "email", "phone", "contact_status",
+    "category", "location", "email", "phone", "contact_name", "contact_status",
     "ContactSource", "provider", "assessment_key", "source_run_key",
     "source_lead_hunt_run_id", "review_workflow_run_id", "confidence_level",
     "replicates_required",
@@ -129,6 +129,7 @@ def apply_event(repo: Path, event: dict) -> dict:
         "location": str(context.get("location") or row.get("location") or ""),
         "email": str(context.get("email") or row.get("email") or ""),
         "phone": normalize_phone(context.get("phone") or row.get("phone") or ""),
+        "contact_name": str(context.get("contact_name") or row.get("contact_name") or ""),
         "contact_status": str(context.get("contact_status") or row.get("contact_status") or "not_found"),
         "ContactSource": str(context.get("ContactSource") or context.get("email_source_url") or row.get("ContactSource") or ""),
         "provider": provider,
@@ -331,6 +332,7 @@ def main() -> int:
                     context.update({
                         "email": contact.get("email", ""),
                         "phone": contact.get("phone", ""),
+                        "contact_name": contact.get("contact_name", ""),
                         "contact_status": contact.get("status", "not_found"),
                         "ContactSource": contact.get("email_source_url", ""),
                         "location": format_location(candidate.get("configured_location", ""), candidate.get("region", "")),
