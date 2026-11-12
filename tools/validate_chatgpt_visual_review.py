@@ -193,8 +193,8 @@ def main() -> int:
                 errors.append("uncertain verdict must use a null score")
         elif not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 100:
             errors.append("calibrated visual opportunity score must be an integer from 0 to 100")
-        elif ((verdict == "high" and score < 75)
-              or (verdict == "medium" and not 50 <= score <= 74)
+        elif ((verdict == "high" and score < 76)
+              or (verdict == "medium" and not 50 <= score <= 75)
               or (verdict == "pass" and score > 49)):
             errors.append("calibrated verdict does not match its score band")
         if review.get("confidence") not in {"low", "medium", "high"}:

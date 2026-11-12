@@ -89,7 +89,7 @@ def load_rows(path: Path) -> dict[str, dict[str, str]]:
 
 
 def verdict(score: int) -> str:
-    return "pass" if score < 50 else "medium" if score < 75 else "high"
+    return "pass" if score < 50 else "medium" if score < 76 else "high"
 
 
 def serialize_points(points: dict[str, float]) -> str:

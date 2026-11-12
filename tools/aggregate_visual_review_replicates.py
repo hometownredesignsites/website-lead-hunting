@@ -47,7 +47,7 @@ def aggregate(attempt_root: Path, output: Path) -> dict:
         aggregation = choose_aggregate_score(valid_reviews)
         exact_mean = aggregation["mean"]
         score = aggregation["score"]
-        verdict = "pass" if score < 50 else "medium" if score < 75 else "high"
+        verdict = "pass" if score < 50 else "medium" if score < 76 else "high"
         selected_index = aggregation["selected_replicate"]
         review = dict(valid_reviews[selected_index - 1] if selected_index else valid_reviews[0])
         replicate_calibrations = [item.get("score_calibration") or {} for item in valid_reviews]

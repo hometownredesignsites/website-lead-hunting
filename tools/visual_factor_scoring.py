@@ -411,7 +411,7 @@ def normalize_and_score(factors: dict, audit: dict | None = None) -> dict:
         # redesign opportunity, on par with a confirmed missing hero image.
         points["design_freshness"] = max(points.get("design_freshness", 0), dated_design_floor_points)
     score = min(100, sum(points.values()) + stale_copyright_points)
-    verdict = "pass" if score < 50 else "medium" if score < 75 else "high"
+    verdict = "pass" if score < 50 else "medium" if score < 76 else "high"
     return {"errors": [], "factors": normalized, "factor_points": points,
             "hero_media_absence_points": hero_absence_points,
             "hero_media_status": hero_status,

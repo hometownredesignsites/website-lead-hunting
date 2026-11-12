@@ -28,7 +28,7 @@ class VisualFactorScoringTests(unittest.TestCase):
         self.assertEqual((result["score"], result["verdict"]), (50, "medium"))
         factors["layout_mobile"]["severity"] = "moderate"
         result = normalize_and_score(factors)
-        self.assertEqual((result["score"], result["verdict"]), (75, "high"))
+        self.assertEqual((result["score"], result["verdict"]), (75, "medium"))
 
     def test_absent_hero_floor_adds_independent_factor_points_without_double_counting(self):
         factors = self.factors()
