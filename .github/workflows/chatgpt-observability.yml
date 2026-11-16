@@ -54,7 +54,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin git-chatgpt
+          git pull --rebase --autostash origin git-chatgpt
           git add observability/chatgpt
           if git diff --cached --quiet; then
             echo "Dashboard is unchanged."
