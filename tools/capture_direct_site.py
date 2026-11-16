@@ -77,7 +77,7 @@ async def capture_one(args: argparse.Namespace) -> dict:
         "business_name": args.business_name.strip(),
         "category": args.category.strip() or "Direct URL assessment",
         "configured_location": args.city.strip(),
-        "region": args.city.strip(),
+        "region": "",
         "domain": host,
         "canonical_url": requested_url,
         "final_url": requested_url,
