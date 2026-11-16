@@ -24,7 +24,12 @@ def _canonical_state(value: str) -> str:
     cleaned = (value or "").strip().rstrip(".")
     if len(cleaned) == 2:
         return STATE_NAMES.get(cleaned.upper(), "")
-    return STATE_BY_NAME.get(cleaned.casefold(), cleaned)
+    suffix = cleaned.rsplit(",", 1)[-1].strip()
+    return (
+        STATE_NAMES.get(suffix.upper())
+        or STATE_BY_NAME.get(suffix.casefold())
+        or STATE_BY_NAME.get(cleaned.casefold(), cleaned)
+    )
 
 
 def format_location(city_value: str, state_value: str = "") -> str:
