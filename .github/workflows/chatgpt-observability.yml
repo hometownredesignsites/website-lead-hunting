@@ -1,0 +1,64 @@
+name: Refresh private ChatGPT lead dashboard
+run-name: Refresh ChatGPT lead dashboard (${{ github.event_name }})
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [git-chatgpt]
+    paths:
+      - config/cities.csv
+      - config/business_categories.csv
+  workflow_run:
+    workflows:
+      - City-upload lead-hunt and visual-review campaign
+      - ChatGPT website lead hunt
+      - ChatGPT visual review batch
+      - Schedule ChatGPT visual review retries
+      - Queue direct-URL website assessment
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: chatgpt-lead-dashboard
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'git-chatgpt'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out dashboard builder
+        uses: actions/checkout@v5
+      - name: Check out private operations data
+        uses: actions/checkout@v5
+        with:
+          repository: hometownredesignsites/website-lead-hunting-operations
+          ref: git-chatgpt
+          path: operations-data
+          token: ${{ secrets.PRIVATE_RESULTS_TOKEN }}
+      - name: Build private HTML and CSV reports
+        run: >-
+          python tools/build_lead_dashboard.py
+          --operations operations-data
+          --output operations-data/observability/chatgpt
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+      - name: Commit refreshed report to the private operations branch
+        working-directory: operations-data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin git-chatgpt
+          git add observability/chatgpt
+          if git diff --cached --quiet; then
+            echo "Dashboard is unchanged."
+            exit 0
+          fi
+          git commit -m "observability: refresh ChatGPT lead dashboard"
+          git push origin HEAD:git-chatgpt
