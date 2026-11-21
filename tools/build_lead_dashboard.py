@@ -122,6 +122,6 @@ def main():
     (a.output/"snapshot.json").write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (a.output/"index.html").write_text(render(data),encoding="utf-8")
     write_csv(a.output/"category_city_progress.csv",data["category_city"],["category_index","category","city","status","query_status","failure_reason"])
-    write_csv(a.output/"lead_hunt_batches.csv",data["batches"],["run_key","category","cities","status","processed_queries","expected_queries","started_at","finished_at","duration_seconds","failure_reason"])
+    write_csv(a.output/"lead_hunt_batches.csv",data["batches"],["run_key","category","cities","status","processed_queries","expected_queries","completed_count","failed_count","pending_count","attempt_count","failure_category","failure_details","source_run_ids","started_at","finished_at","duration_seconds","failure_reason"])
 
 if __name__=="__main__": main()
