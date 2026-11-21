@@ -712,7 +712,7 @@ def save_run(run_dir: Path, queries: list[dict], records: dict[int, dict], candi
     lifecycle = manifest.setdefault("lifecycle", {})
     stamp = progress["updated_at"]
     run_id = str(os.environ.get("GITHUB_RUN_ID", "")).strip()
-    run_attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
+    run_attempt = int(os.environ.get("CAMPAIGN_ATTEMPT") or os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
     lifecycle.setdefault("created_at", manifest.get("created_at") or stamp)
     lifecycle.setdefault("started_at", stamp)
     lifecycle.setdefault("finished_at", None)
@@ -723,6 +723,9 @@ def save_run(run_dir: Path, queries: list[dict], records: dict[int, dict], candi
     lifecycle.setdefault("failure_details", None)
     if run_id and run_id not in lifecycle["source_run_ids"]:
         lifecycle["source_run_ids"].append(run_id)
+        lifecycle["finished_at"] = None
+        lifecycle["failure_category"] = None
+        lifecycle["failure_details"] = None
     lifecycle["attempt_count"] = max(int(lifecycle.get("attempt_count", 0) or 0), run_attempt)
     lifecycle["completed_count"] = int(progress["successful"])
     lifecycle["failed_count"] = int(progress["errors"] + progress["blocked"])
