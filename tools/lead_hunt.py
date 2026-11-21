@@ -708,6 +708,35 @@ def save_run(run_dir: Path, queries: list[dict], records: dict[int, dict], candi
                 "status": "COMPLETE" if complete else "BLOCKED" if blocked else "IN_PROGRESS",
                 "updated_at": now_iso()}
     atomic_json(run_dir / "LOCATION_CATEGORY_PROGRESS.json", progress)
+    # Persist the lifecycle snapshot at every query checkpoint, not only in the final report.
+    lifecycle = manifest.setdefault("lifecycle", {})
+    stamp = progress["updated_at"]
+    run_id = str(os.environ.get("GITHUB_RUN_ID", "")).strip()
+    run_attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
+    lifecycle.setdefault("created_at", manifest.get("created_at") or stamp)
+    lifecycle.setdefault("started_at", stamp)
+    lifecycle.setdefault("finished_at", None)
+    lifecycle.setdefault("target_count", len(queries))
+    lifecycle.setdefault("source_run_ids", [])
+    lifecycle.setdefault("attempt_count", 0)
+    lifecycle.setdefault("failure_category", None)
+    lifecycle.setdefault("failure_details", None)
+    if run_id and run_id not in lifecycle["source_run_ids"]:
+        lifecycle["source_run_ids"].append(run_id)
+    lifecycle["attempt_count"] = max(int(lifecycle.get("attempt_count", 0) or 0), run_attempt)
+    lifecycle["completed_count"] = int(progress["successful"])
+    lifecycle["failed_count"] = int(progress["errors"] + progress["blocked"])
+    lifecycle["pending_count"] = int(progress["pending"])
+    lifecycle["status"] = ("completed" if complete and progress["pending"] == 0
+                           else "blocked" if blocked
+                           else "failed" if progress["pending"] == 0 and progress["errors"] > 0
+                           else "running")
+    failures = [str(row.get("error")) for row in records.values() if row.get("error")]
+    lifecycle["failure_category"] = ("blocked" if blocked else "query_error" if failures else None)
+    lifecycle["failure_details"] = "; ".join(dict.fromkeys(failures))[:4000] if failures else None
+    if lifecycle["status"] in {"completed", "failed", "blocked"}:
+        lifecycle["finished_at"] = lifecycle.get("finished_at") or stamp
+    manifest["lifecycle"] = lifecycle
     atomic_json(run_dir / "RUN_MANIFEST.json", manifest)
     return progress
 
