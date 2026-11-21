@@ -38,18 +38,27 @@ def batch_rows(root):
         manifest=load(manifest_path); folder=manifest_path.parent
         summary=load(folder/"RUN_SUMMARY.json"); progress=load(folder/"LOCATION_CATEGORY_PROGRESS.json")
         queries=jsonl(folder/"QUERY_LEDGER.jsonl")
+        lifecycle=manifest.get("lifecycle") if isinstance(manifest.get("lifecycle"),dict) else {}
         starts=[dt(q.get("started_at")) for q in queries if dt(q.get("started_at"))]
         ends=[dt(q.get("finished_at") or q.get("timestamp")) for q in queries if dt(q.get("finished_at") or q.get("timestamp"))]
-        start=min(starts) if starts else None; end=max(ends) if ends else None
+        start=dt(lifecycle.get("started_at")) or (min(starts) if starts else None)
+        end=dt(lifecycle.get("finished_at")) or (max(ends) if ends else None)
         failures=[str(q.get("error")) for q in queries if q.get("error")]
         failures += [str(e) for e in summary.get("errors",[]) if e]
         terminal_count=sum(1 for q in queries if terminal(q.get("terminal_status")))
-        active=str(progress.get("status") or summary.get("progress_status") or "").lower() in {"in_progress","running"}
+        active=str(lifecycle.get("status") or progress.get("status") or summary.get("progress_status") or "").lower() in {"in_progress","running"}
         if active and start: end=datetime.now(timezone.utc)
         seconds=int((end-start).total_seconds()) if start and end else None
+        status=lifecycle.get("status") or progress.get("status") or summary.get("progress_status") or "unknown"
         result.append({"run_key":manifest.get("run_key",folder.name),"category":(manifest.get("categories") or [""])[0],
-          "cities":", ".join(manifest.get("locations") or []),"status":progress.get("status") or summary.get("progress_status") or "unknown",
-          "processed_queries":terminal_count,"expected_queries":progress.get("total_queries") or summary.get("expected_queries") or len(queries),
+          "cities":", ".join(manifest.get("locations") or []),"status":status,
+          "processed_queries":lifecycle.get("completed_count",terminal_count),
+          "expected_queries":lifecycle.get("target_count") or progress.get("total_queries") or summary.get("expected_queries") or len(queries),
+          "completed_count":lifecycle.get("completed_count",terminal_count),"failed_count":lifecycle.get("failed_count",progress.get("errors",0)),
+          "pending_count":lifecycle.get("pending_count",progress.get("pending",0)),
+          "attempt_count":lifecycle.get("attempt_count",0),"failure_category":lifecycle.get("failure_category") or "",
+          "failure_details":lifecycle.get("failure_details") or "; ".join(dict.fromkeys(failures)),
+          "source_run_ids":lifecycle.get("source_run_ids",[]),
           "started_at":stamp(start),"finished_at":stamp(end),"duration_seconds":seconds,
           "failure_reason":"; ".join(dict.fromkeys(failures))})
     return sorted(result,key=lambda r:r["started_at"],reverse=True)
