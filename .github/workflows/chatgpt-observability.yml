@@ -2,8 +2,6 @@ name: Refresh private ChatGPT lead dashboard
 run-name: Refresh ChatGPT lead dashboard (${{ github.event_name }})
 
 on:
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
   push:
     branches: [git-chatgpt]
